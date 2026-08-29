@@ -633,11 +633,14 @@ fn classify_path(
     if path.is_symlink() || !path.is_file() {
         return Ok(StatusKind::Conflict);
     }
-    let contents = file::read_to_string(path)?;
-    let actual_hash = crate::hash::hash_sha256_to_str(&contents);
+    let actual_hash = file_hash(path)?;
     if actual_hash == expected_hash && (cfg!(windows) || file::is_executable(path)) {
         return Ok(StatusKind::Current);
     }
+    let contents = match file::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return Ok(StatusKind::Conflict),
+    };
     let owned = contents
         .lines()
         .any(|line| line == format!("{MANAGED_MARKER_PREFIX}{bundle_id}"));
@@ -666,9 +669,7 @@ fn validate_managed_path(state: &BundleState, name: &str, path: &Path) -> Result
 }
 
 fn file_hash(path: &Path) -> Result<String> {
-    Ok(crate::hash::hash_sha256_to_str(&file::read_to_string(
-        path,
-    )?))
+    crate::hash::file_hash_sha256(path, None)
 }
 
 pub(crate) fn tracked_stub_paths() -> Result<Vec<PathBuf>> {
@@ -705,6 +706,18 @@ mod tests {
             "# managed by mise tool-stubs bundle bundle\nchanged\n",
         )
         .unwrap();
+
+        assert_eq!(
+            classify_path(&path, "different", "bundle", None).unwrap(),
+            StatusKind::Conflict
+        );
+    }
+
+    #[test]
+    fn treats_non_utf8_files_as_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("rg");
+        std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
 
         assert_eq!(
             classify_path(&path, "different", "bundle", None).unwrap(),

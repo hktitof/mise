@@ -29,11 +29,9 @@ mise tool-stubs sync stubs.toml --force
 assert_not_contains "cat bin/dummy-one" "local edit"
 assert_contains "./bin/dummy-one" "This is Dummy 2.0.0"
 
-# Unowned files are collisions and are not overwritten without an explicit force.
-cat >bin/collision <<'EOF'
-#!/usr/bin/env bash
-echo user-owned
-EOF
+# Unowned files, including native binaries, are collisions and are not
+# overwritten without an explicit force.
+printf '\377\376\000' >bin/collision
 chmod +x bin/collision
 cat >stubs.toml <<'EOF'
 [commands]
@@ -42,9 +40,9 @@ collision = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
 assert_contains "mise tool-stubs status stubs.toml" "conflict"
 assert_fail "mise tool-stubs sync stubs.toml"
-assert_contains "cat bin/collision" "user-owned"
+assert_contains "od -An -tx1 bin/collision" "ff fe 00"
 mise tool-stubs sync stubs.toml --force
-assert_not_contains "cat bin/collision" "user-owned"
+assert_contains "cat bin/collision" "managed by mise tool-stubs bundle"
 
 # Commands removed from the manifest are removed only when still owned.
 cat >stubs.toml <<'EOF'
