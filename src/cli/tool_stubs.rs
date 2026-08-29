@@ -446,7 +446,10 @@ fn resolve_bundle(manifest: &Path, into: Option<&Path>) -> Result<Bundle> {
 }
 
 fn list_states() -> Result<Vec<BundleState>> {
-    let dir = &*crate::dirs::TOOL_STUB_BUNDLES;
+    list_states_in(&crate::dirs::TOOL_STUB_BUNDLES)
+}
+
+fn list_states_in(dir: &Path) -> Result<Vec<BundleState>> {
     if !dir.is_dir() {
         return Ok(vec![]);
     }
@@ -456,8 +459,13 @@ fn list_states() -> Result<Vec<BundleState>> {
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        if let Some(state) = load_state(&path)? {
-            states.push(state);
+        match load_state(&path) {
+            Ok(Some(state)) => states.push(state),
+            Ok(None) => {}
+            Err(err) => warn!(
+                "ignoring invalid tool-stub bundle state {}: {err:#}",
+                display_path(&path)
+            ),
         }
     }
     Ok(states)
@@ -717,5 +725,28 @@ mod tests {
             classify_path(&path, "different", "bundle", None).unwrap(),
             StatusKind::Conflict
         );
+    }
+
+    #[test]
+    fn skips_invalid_state_while_discovering_bundles() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("broken.json"), "not json").unwrap();
+
+        let manifest_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        let id = bundle_id(&manifest_path, &into);
+        let state = BundleState {
+            schema_version: STATE_SCHEMA_VERSION,
+            id: id.clone(),
+            manifest_path,
+            manifest_hash: "manifest".into(),
+            into,
+            commands: BTreeMap::new(),
+        };
+        save_state(&tmp.path().join(format!("{id}.json")), &state).unwrap();
+
+        let states = list_states_in(tmp.path()).unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].id, id);
     }
 }
