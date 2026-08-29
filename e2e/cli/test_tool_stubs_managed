@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+
+mkdir -p managed-stubs/bin
+cd managed-stubs
+
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "1", bin = "dummy" }
+EOF
+
+# Sync writes an executable stub but preserves lazy installation.
+mise tool-stubs sync stubs.toml --into ./bin
+assert "test -x bin/dummy-one"
+assert_contains "cat bin/dummy-one" "managed by mise tool-stubs bundle"
+assert_contains "mise tool-stubs status stubs.toml" "current"
+assert_not_contains "mise ls --installed dummy" "1.1.0"
+assert_contains "./bin/dummy-one" "This is Dummy 1.1.0"
+
+# Manifest changes are stale, while edits to generated files are modified.
+sed -i 's/version = "1"/version = "2"/' stubs.toml
+assert_contains "mise tool-stubs status stubs.toml" "stale"
+mise tool-stubs sync stubs.toml
+assert_contains "cat bin/dummy-one" 'version = "2"'
+
+printf '\n# local edit\n' >>bin/dummy-one
+assert_contains "mise tool-stubs status stubs.toml" "modified"
+assert_fail "mise tool-stubs sync stubs.toml"
+mise tool-stubs sync stubs.toml --force
+assert_not_contains "cat bin/dummy-one" "local edit"
+assert_contains "./bin/dummy-one" "This is Dummy 2.0.0"
+
+# Unowned files are collisions and are not overwritten without an explicit force.
+cat >bin/collision <<'EOF'
+#!/usr/bin/env bash
+echo user-owned
+EOF
+chmod +x bin/collision
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+collision = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+assert_contains "mise tool-stubs status stubs.toml" "conflict"
+assert_fail "mise tool-stubs sync stubs.toml"
+assert_contains "cat bin/collision" "user-owned"
+mise tool-stubs sync stubs.toml --force
+assert_not_contains "cat bin/collision" "user-owned"
+
+# Commands removed from the manifest are removed only when still owned.
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+mise tool-stubs sync stubs.toml
+assert_fail "test -e bin/collision"
+
+# --missing is concise enough for provisioning scripts.
+rm bin/dummy-one
+assert "mise tool-stubs status stubs.toml --missing" "dummy-one"
+mise tool-stubs sync stubs.toml
+
+# Removal protects edits and never uninstalls tools.
+printf '\n# keep me\n' >>bin/dummy-one
+assert_fail "mise tool-stubs remove stubs.toml"
+mise tool-stubs remove stubs.toml --force
+assert_fail "test -e bin/dummy-one"
+assert_contains "mise ls --installed dummy" "2.0.0"
+
+# Upgrade acts only on already-installed versions selected by stubs.
+mise uninstall dummy --all
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "1", bin = "dummy" }
+EOF
+mise tool-stubs sync stubs.toml --into ./bin
+mise install dummy@1.0.0
+assert_contains "mise tool-stubs upgrade stubs.toml --dry-run" "Would install dummy@1.1.0"
+mise tool-stubs upgrade stubs.toml --no-prune
+assert_contains "mise ls --installed dummy" "1.1.0"
+assert_contains "mise ls --installed dummy" "1.0.0"
+
+# The top-level upgrade flag covers every tracked stub as well.
+mise uninstall dummy@1.1.0
+assert_fail_contains "mise upgrade --tool-stubs --dry-run-code --no-prune 2>&1" "Would install dummy@1.1.0"
+mise upgrade --tool-stubs --no-prune
+assert_contains "mise ls --installed dummy" "1.1.0"
+
+# Immediate pruning reconciles aliases that pointed at the replaced version.
+mise uninstall dummy@1.1.0
+ln -s ./1.0.0 "$MISE_DATA_DIR/installs/dummy/retired-stub"
+mise tool-stubs upgrade stubs.toml --prune
+assert_not_contains "mise ls --installed dummy" "1.0.0"
+assert_fail "test -L '$MISE_DATA_DIR/installs/dummy/retired-stub'"
+
+mise tool-stubs remove stubs.toml
+rm -f stubs.toml

@@ -73,6 +73,7 @@ mod test_tool;
 mod token;
 mod tool;
 pub(crate) mod tool_stub;
+mod tool_stubs;
 mod trust;
 mod uninstall;
 mod unset;
@@ -277,6 +278,7 @@ pub(crate) enum Commands {
     Token(token::Token),
     Tool(tool::Tool),
     ToolStub(tool_stub::ToolStub),
+    ToolStubs(tool_stubs::ToolStubs),
     Trust(trust::Trust),
     Uninstall(uninstall::Uninstall),
     Unset(unset::Unset),
@@ -397,6 +399,7 @@ impl Commands {
             Self::Token(cmd) => cmd.run().await,
             Self::Tool(cmd) => cmd.run().await,
             Self::ToolStub(cmd) => cmd.run().await,
+            Self::ToolStubs(cmd) => cmd.run().await,
             Self::Trust(cmd) => cmd.run().await,
             Self::Uninstall(cmd) => cmd.run().await,
             Self::Unset(cmd) => cmd.run().await,
@@ -810,9 +813,6 @@ impl Cli {
         // Load .miserc.toml early, before MISE_ENV and other early settings are accessed.
         // This allows setting MISE_ENV in a config file instead of only via env vars.
         crate::config::miserc::init()?;
-        if *crate::env::MISE_TOOL_STUB && args.len() >= 2 {
-            tool_stub::short_circuit_stub(&args[2..]).await?;
-        }
         // Fast-path for hook-env: exit early if nothing has changed
         // This avoids expensive backend::load_tools() and config loading
         if hook_env_module::should_exit_early_fast() {

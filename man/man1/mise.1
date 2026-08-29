@@ -747,6 +747,21 @@ Gets information about a tool
 \fBtool\-stub\fR
 Execute a tool stub
 .TP
+\fBtool\-stubs\fR
+Manage executable tool\-stub bundles from a TOML manifest
+.TP
+\fBtool\-stubs sync\fR
+Create or update the executable stubs declared by a manifest
+.TP
+\fBtool\-stubs status\fR
+Show whether generated stubs match their manifest and ownership state
+.TP
+\fBtool\-stubs upgrade\fR
+Upgrade versions selected by managed tool stubs
+.TP
+\fBtool\-stubs remove\fR
+Remove command files owned by a synchronized bundle
+.TP
 \fBtrust\fR
 Marks a config file as trusted
 .TP
@@ -5536,6 +5551,129 @@ The stub file must contain TOML configuration specifying the tool and version to
 Arguments to pass to the tool
 
 All arguments after the stub file path will be forwarded to the underlying tool. Use '\-\-' to separate mise arguments from tool arguments if needed.
+.SH "MISE TOOL-STUBS"
+Manage executable tool\-stub bundles from a TOML manifest
+
+A manifest declares commands under `[commands]`. String values use
+`tool@version` syntax; tables accept the same fields as `mise tool\-stub`.
+Syncing writes executable stubs without installing their tools. The first
+invocation of each stub installs its declared version lazily.
+
+```toml
+[commands]
+rg = "ripgrep@14"
+node = { version = "22", bin = "node" }
+```
+.PP
+\fBUsage:\fR mise tool\-stubs [OPTIONS] <COMMAND>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-h, \-\-help\fR
+Print help
+.SH "MISE TOOL-STUBS SYNC"
+Create or update the executable stubs declared by a manifest
+.PP
+\fBUsage:\fR mise tool\-stubs sync [OPTIONS] <MANIFEST>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-into\fR \fI<DIR>\fR
+Directory in which to write commands [default: ~/.local/bin]
+.TP
+\fB\-f, \-\-force\fR
+Replace modified or conflicting command files
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<MANIFEST>\fR
+Path to the tool\-stub bundle manifest
+.SH "MISE TOOL-STUBS STATUS"
+Show whether generated stubs match their manifest and ownership state
+.PP
+\fBUsage:\fR mise tool\-stubs status [OPTIONS] <MANIFEST>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-into\fR \fI<DIR>\fR
+Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-\-missing\fR
+Print only command names that need to be synchronized
+.TP
+\fB\-\-json\fR
+Print structured status as JSON
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<MANIFEST>\fR
+Path to the tool\-stub bundle manifest
+.SH "MISE TOOL-STUBS UPGRADE"
+Upgrade versions selected by managed tool stubs
+.PP
+\fBUsage:\fR mise tool\-stubs upgrade [OPTIONS] [<MANIFEST>]
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-into\fR \fI<DIR>\fR
+Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-j, \-\-jobs\fR \fI<JOBS>\fR
+Number of parallel install jobs
+.RS
+\fIEnvironment: \fR\fBMISE_JOBS\fR
+.RE
+.TP
+\fB\-n, \-\-dry\-run\fR
+Print the upgrades without installing them
+.TP
+\fB\-\-no\-prune\fR
+Leave replaced versions in place without scheduling them for pruning
+.TP
+\fB\-\-prune\fR
+Immediately remove versions replaced by this upgrade
+.TP
+\fB\-\-raw\fR
+Connect install command input and output directly to the terminal
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<MANIFEST>\fR
+Manifest whose managed stubs should be upgraded; omit to use all tracked stubs
+.SH "MISE TOOL-STUBS REMOVE"
+Remove command files owned by a synchronized bundle
+.PP
+\fBUsage:\fR mise tool\-stubs remove [OPTIONS] <MANIFEST>
+.PP
+\fBOptions:\fR
+.PP
+.TP
+\fB\-\-into\fR \fI<DIR>\fR
+Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-f, \-\-force\fR
+Remove owned command files even when their contents were modified
+.TP
+\fB\-h, \-\-help\fR
+Print help
+\fBArguments:\fR
+.PP
+.TP
+\fB<MANIFEST>\fR
+Path to the tool\-stub bundle manifest
 .SH "MISE TRUST"
 Marks a config file as trusted
 
@@ -5789,6 +5927,9 @@ Use this to bypass `upgrade.prune_after`, or to override
 .TP
 \fB\-\-raw\fR
 Connect backend install command stdin/stdout/stderr directly to the terminal Implies \-\-jobs=1
+.TP
+\fB\-\-tool\-stubs\fR
+Also upgrade versions selected by tracked tool stubs
 .TP
 \fB\-h, \-\-help\fR
 Print help

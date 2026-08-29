@@ -28,6 +28,8 @@ source_code_link_template #"""
 {%- set path = "bootstrap.rs" -%}
 {%- elif path == "tasks/run" -%}
 {%- set path = "run.rs" -%}
+{%- elif path is starting_with(pat="tool_stubs") -%}
+{%- set path = "tool_stubs.rs" -%}
 {%- elif cmd.subcommands | length > 0 -%}
 {%- set parts = path | split(pat="/") -%}
 {%- set path = parts[0] ~ "/mod.rs" -%}

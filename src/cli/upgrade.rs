@@ -16,9 +16,9 @@ use crate::toolset::is_outdated_version;
 use crate::toolset::outdated_info::OutdatedInfo;
 use crate::toolset::outdated_info::prefixed_latest_query;
 use crate::toolset::{
-    ConfigScope, InstallOptions, NeededVersions, ResolveOptions, ToolSource, ToolVersion,
-    ToolsetBuilder, get_versions_needed_by_tracked_configs_excluding_locks,
-    get_versions_needed_by_tracked_stubs,
+    ConfigScope, InstallOptions, NeededVersions, ResolveOptions, ToolSource, ToolVersion, Toolset,
+    ToolsetBuilder, get_versions_needed_by_tracked_configs,
+    get_versions_needed_by_tracked_configs_excluding_locks, get_versions_needed_by_tracked_stubs,
 };
 use crate::ui::multi_progress_report::MultiProgressReport;
 use crate::ui::progress_report::SingleReport;
@@ -129,6 +129,10 @@ pub(crate) struct Upgrade {
     /// Implies --jobs=1
     #[usage(long, overrides = "jobs")]
     raw: bool,
+
+    /// Also upgrade versions selected by tracked tool stubs
+    #[usage(long)]
+    tool_stubs: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,6 +140,209 @@ enum PruneMode {
     None,
     Immediate,
     Deferred(Duration),
+}
+
+fn configured_prune_mode(no_prune: bool, prune: bool) -> Result<PruneMode> {
+    if prune {
+        return Ok(PruneMode::Immediate);
+    }
+    if no_prune || !Settings::get().upgrade.auto_prune {
+        return Ok(PruneMode::None);
+    }
+    Ok(PruneMode::Deferred(
+        Settings::get().upgrade_prune_after_duration()?,
+    ))
+}
+
+pub(crate) async fn upgrade_tool_stub_paths(
+    paths: Vec<PathBuf>,
+    jobs: Option<usize>,
+    dry_run: bool,
+    no_prune: bool,
+    prune: bool,
+    raw: bool,
+) -> Result<bool> {
+    let prune_mode = configured_prune_mode(no_prune, prune)?;
+    let mut paths = paths
+        .into_iter()
+        .map(|path| std::path::absolute(&path).unwrap_or(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        return Ok(false);
+    }
+
+    let mut config = Config::get().await?;
+    let mut toolset = Toolset::new(ToolSource::Unknown);
+    let mut stubs = vec![];
+    for path in paths {
+        let stub = crate::cli::tool_stub::ToolStubFile::from_file(&path).wrap_err_with(|| {
+            format!("failed to load tracked tool stub {}", display_path(&path))
+        })?;
+        toolset.add_version(stub.to_tool_request(&path)?);
+        stubs.push((path, stub));
+    }
+    toolset.resolve(&config).await?;
+    for (path, stub) in &stubs {
+        stub.apply_lock(&mut toolset, path);
+    }
+
+    let resolve_options = ResolveOptions {
+        use_locked_version: false,
+        latest_versions: true,
+        resolve_rolling_channels: false,
+        prefer_exact_version: false,
+        before_date: None,
+        before_date_from_default: false,
+        filter_installed_versions_by_release_date: false,
+        offline: false,
+        refresh_remote_versions: false,
+        inactive: false,
+    };
+    let outdated = toolset
+        .list_outdated_versions(&config, false, &resolve_options)
+        .await
+        .into_iter()
+        // Sync is intentionally lazy: an upgrade should not install commands
+        // that have never been invoked.
+        .filter(|outdated| outdated.current.is_some())
+        .collect::<Vec<_>>();
+    if outdated.is_empty() {
+        return Ok(false);
+    }
+
+    let to_remove = outdated
+        .iter()
+        .filter_map(|outdated| {
+            outdated.current.as_ref().and_then(|current| {
+                (current != &outdated.latest).then_some((outdated, current.clone()))
+            })
+        })
+        .collect::<Vec<_>>();
+    if dry_run {
+        for (outdated, current) in &to_remove {
+            match prune_mode {
+                PruneMode::Immediate => {
+                    miseprintln!("Would uninstall {}@{}", outdated.name, current);
+                }
+                PruneMode::Deferred(_) => miseprintln!(
+                    "Would schedule {}@{} for pruning after {}",
+                    outdated.name,
+                    current,
+                    Settings::get().upgrade.prune_after
+                ),
+                PruneMode::None => {}
+            }
+        }
+        for outdated in &outdated {
+            miseprintln!(
+                "Would install {}@{} for {}",
+                outdated.name,
+                outdated.latest,
+                outdated.source
+            );
+        }
+        return Ok(true);
+    }
+
+    let install_options = InstallOptions {
+        reason: "tool-stub upgrade".into(),
+        jobs,
+        raw,
+        resolve_options,
+        ..Default::default()
+    };
+    let requests = outdated
+        .iter()
+        .map(|outdated| outdated.tool_request.clone())
+        .collect();
+    let (successful_versions, install_error) = split_install_result(
+        toolset
+            .install_all_versions(&mut config, requests, &install_options)
+            .await,
+    );
+
+    for outdated in &outdated {
+        if successful_versions.iter().any(|version| {
+            version.ba() == outdated.tool_version.ba() && version.version == outdated.latest
+        }) && let Some(path) = outdated.source.path()
+            && let Err(err) = crate::cli::tool_stub::invalidate_cache(path)
+        {
+            warn!(
+                "failed to invalidate tool-stub cache for {}: {err:#}",
+                display_path(path)
+            );
+        }
+    }
+
+    let mut needed = get_versions_needed_by_tracked_configs(&config, true, true).await?;
+    needed.extend(get_versions_needed_by_tracked_stubs(&config).await?);
+    let mpr = MultiProgressReport::get();
+    for (outdated, old_version) in to_remove {
+        if !successful_versions.iter().any(|version| {
+            version.ba() == outdated.tool_version.ba() && version.version == outdated.latest
+        }) {
+            continue;
+        }
+        let old_tv = ToolVersion::new(outdated.tool_version.request.clone(), old_version.clone());
+        let version_key = (old_tv.ba().short.to_string(), old_tv.tv_pathname());
+        if needed.contains_key(&version_key) {
+            debug!(
+                "Keeping {}@{} because it is still needed by a tracked config or tool stub",
+                outdated.name, old_version
+            );
+            continue;
+        }
+        match prune_mode {
+            PruneMode::Immediate => {
+                let pr = mpr.add(&format!("uninstall {}@{}", outdated.name, old_version));
+                match old_tv
+                    .backend()?
+                    .uninstall_version(&config, &old_tv, pr.as_ref(), false)
+                    .await
+                {
+                    Ok(()) => {
+                        pr.finish();
+                        if let Err(err) = crate::tool_purgatory::forget_path(&old_tv.install_path())
+                        {
+                            warn!("failed to clear tool purgatory entry: {err:#}");
+                        }
+                        crate::runtime_symlinks::remove_missing_symlinks(old_tv.backend()?)?;
+                    }
+                    Err(err) => warn!(
+                        "Failed to uninstall old version of {}: {err:#}",
+                        outdated.name
+                    ),
+                }
+            }
+            PruneMode::Deferred(after) => {
+                crate::tool_purgatory::schedule(&old_tv, after)?;
+                info!(
+                    "{}@{} will be pruned after {}",
+                    outdated.name,
+                    old_version,
+                    Settings::get().upgrade.prune_after
+                );
+            }
+            PruneMode::None => {}
+        }
+    }
+    mpr.finish_progress();
+    if !successful_versions.is_empty() {
+        config = Config::reset().await?;
+        let ts = config.get_toolset().await?;
+        crate::config::rebuild_shims_and_runtime_symlinks(
+            &config,
+            ts,
+            &[],
+            crate::lockfile::LockfileUpdateMode::Normal,
+        )
+        .await?;
+    }
+    Upgrade::print_summary(&outdated, &successful_versions)?;
+    install_error?;
+    Ok(true)
 }
 
 impl Upgrade {
@@ -146,15 +353,7 @@ impl Upgrade {
     /// How versions upgraded away from should be handled. Either flag wins over
     /// the settings, and `overrides_with` makes the later flag win.
     fn prune_mode(&self) -> Result<PruneMode> {
-        if self.prune {
-            return Ok(PruneMode::Immediate);
-        }
-        if self.no_prune || !Settings::get().upgrade.auto_prune {
-            return Ok(PruneMode::None);
-        }
-        Ok(PruneMode::Deferred(
-            Settings::get().upgrade_prune_after_duration()?,
-        ))
+        configured_prune_mode(self.no_prune, self.prune)
     }
 
     fn scope(&self) -> ConfigScope {
@@ -226,8 +425,8 @@ impl Upgrade {
         if self.interactive && !outdated.is_empty() {
             outdated = self.get_interactive_tool_set(&outdated)?;
         }
+        let config_tools_outdated = !outdated.is_empty();
         if outdated.is_empty() {
-            info!("All tools are up to date");
             if !self.bump {
                 let bump_outdated = ts
                     .list_outdated_versions_filtered(
@@ -246,6 +445,26 @@ impl Upgrade {
             }
         } else {
             self.upgrade(&mut config, outdated, before_date).await?;
+        }
+
+        let tool_stubs_outdated = if self.tool_stubs {
+            upgrade_tool_stub_paths(
+                crate::cli::tool_stubs::tracked_stub_paths()?,
+                self.jobs,
+                self.is_dry_run(),
+                self.no_prune,
+                self.prune,
+                self.raw,
+            )
+            .await?
+        } else {
+            false
+        };
+        if !config_tools_outdated && !tool_stubs_outdated {
+            info!("All tools are up to date");
+        }
+        if self.dry_run_code && (config_tools_outdated || tool_stubs_outdated) {
+            return Err(exit::request(1));
         }
 
         Ok(())
@@ -379,7 +598,7 @@ impl Upgrade {
                     );
                 }
             }
-            if self.dry_run_code {
+            if self.dry_run_code && !self.tool_stubs {
                 return Err(exit::request(1));
             }
             return Ok(());

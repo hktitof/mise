@@ -689,6 +689,23 @@ export const commands: { [key: string]: Command } = {
   "tool-stub": {
     hide: false,
   },
+  "tool-stubs": {
+    hide: false,
+    subcommands: {
+      remove: {
+        hide: false,
+      },
+      status: {
+        hide: false,
+      },
+      sync: {
+        hide: false,
+      },
+      upgrade: {
+        hide: false,
+      },
+    },
+  },
   trust: {
     hide: false,
   },

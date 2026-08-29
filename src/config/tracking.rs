@@ -19,6 +19,15 @@ impl Tracker {
         Self::track_in(&TRACKED_STUBS, path)
     }
 
+    pub(crate) fn untrack_stub(path: &Path) -> Result<()> {
+        let tracking_path = TRACKED_STUBS.join(hash_to_str(&path));
+        match remove_file(tracking_path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     fn track_in(dir: &Path, path: &Path) -> Result<()> {
         let tracking_path = dir.join(hash_to_str(&path));
         if !tracking_path.exists() {

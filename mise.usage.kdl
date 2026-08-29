@@ -33,6 +33,8 @@ source_code_link_template #"""
 {%- set path = "bootstrap.rs" -%}
 {%- elif path == "tasks/run" -%}
 {%- set path = "run.rs" -%}
+{%- elif path is starting_with(pat="tool_stubs") -%}
+{%- set path = "tool_stubs.rs" -%}
 {%- elif cmd.subcommands | length > 0 -%}
 {%- set parts = path | split(pat="/") -%}
 {%- set path = parts[0] ~ "/mod.rs" -%}
@@ -4046,6 +4048,70 @@ Arguments to pass to the tool
 All arguments after the stub file path will be forwarded to the underlying tool. Use '--' to separate mise arguments from tool arguments if needed.
 """# required=#false double_dash=automatic var=#true
 }
+cmd tool-stubs subcommand_required=#true help="Manage executable tool-stub bundles from a TOML manifest" effect=read {
+    long_help #"""
+Manage executable tool-stub bundles from a TOML manifest
+
+A manifest declares commands under `[commands]`. String values use
+`tool@version` syntax; tables accept the same fields as `mise tool-stub`.
+Syncing writes executable stubs without installing their tools. The first
+invocation of each stub installs its declared version lazily.
+
+```toml
+[commands]
+rg = "ripgrep@14"
+node = { version = "22", bin = "node" }
+```
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd sync help="Create or update the executable stubs declared by a manifest" effect=write {
+        flag --into help="Directory in which to write commands [default: ~/.local/bin]" {
+            arg <DIR>
+        }
+        flag "-f --force" help="Replace modified or conflicting command files"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        complete manifest type=path
+        complete dir type=dir
+    }
+    cmd status help="Show whether generated stubs match their manifest and ownership state" effect=read {
+        flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
+            arg <DIR>
+        }
+        flag --missing help="Print only command names that need to be synchronized"
+        flag --json help="Print structured status as JSON"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        complete manifest type=path
+        complete dir type=dir
+    }
+    cmd upgrade help="Upgrade versions selected by managed tool stubs" effect=write {
+        flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
+            arg <DIR>
+        }
+        flag "-j --jobs" help="Number of parallel install jobs" env=MISE_JOBS {
+            arg <JOBS>
+        }
+        flag "-n --dry-run" help="Print the upgrades without installing them"
+        flag --no-prune help="Leave replaced versions in place without scheduling them for pruning" overrides=--prune
+        flag --prune help="Immediately remove versions replaced by this upgrade" overrides=--no-prune
+        flag --raw help="Connect install command input and output directly to the terminal" overrides=--jobs
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg "[MANIFEST]" help="Manifest whose managed stubs should be upgraded; omit to use all tracked stubs" required=#false
+        complete manifest type=path
+        complete dir type=dir
+    }
+    cmd remove help="Remove command files owned by a synchronized bundle" effect=destructive {
+        flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
+            arg <DIR>
+        }
+        flag "-f --force" help="Remove owned command files even when their contents were modified"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        complete manifest type=path
+        complete dir type=dir
+    }
+}
 cmd trust help="Marks a config file as trusted" effect=write {
     long_help #"""
 Marks a config file as trusted
@@ -4270,6 +4336,7 @@ Use this to bypass `upgrade.prune_after`, or to override
 """#
     }
     flag --raw help="Connect backend install command stdin/stdout/stderr directly to the terminal Implies --jobs=1" overrides=--jobs
+    flag --tool-stubs help="Also upgrade versions selected by tracked tool stubs"
     flag "-h --help" help="Print help" action=help builtin=#true
     arg "[INSTALLED_TOOL@VERSION]…" help=#"""
 Tool(s) to upgrade

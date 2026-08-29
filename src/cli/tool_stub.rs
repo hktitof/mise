@@ -145,11 +145,17 @@ impl ToolStubFile {
             .ok_or_else(|| eyre!("Invalid stub file name"))?
             .to_string();
 
+        Self::from_content(&content, &stub_name)
+    }
+
+    pub(crate) fn from_content(content: &str, stub_name: &str) -> Result<Self> {
+        ensure!(!stub_name.is_empty(), "Invalid stub file name");
+
         // Check if this is a bootstrap script with embedded TOML
-        let toml_content = if let Some(toml) = extract_toml_from_bootstrap(&content) {
+        let toml_content = if let Some(toml) = extract_toml_from_bootstrap(content) {
             toml
         } else {
-            content
+            content.to_string()
         };
 
         let mut stub: ToolStubFile = toml::from_str(&toml_content)?;
@@ -232,6 +238,30 @@ impl ToolStubFile {
 
         ToolRequest::new_with_options(backend_arg.into(), &version, options, source)
     }
+
+    pub(crate) fn apply_lock(&self, toolset: &mut crate::toolset::Toolset, stub_path: &Path) {
+        let Some(lock) = &self.lock else {
+            return;
+        };
+        for tvl in toolset.versions.values_mut() {
+            for tv in &mut tvl.versions {
+                if !matches!(
+                    tv.request.source(),
+                    ToolSource::ToolStub(path) if path == stub_path
+                ) {
+                    continue;
+                }
+                for (platform_key, lock_platform) in &lock.platforms {
+                    let pi = PlatformInfo {
+                        url: lock_platform.url.clone(),
+                        checksum: lock_platform.checksum.clone(),
+                        ..Default::default()
+                    };
+                    tv.lock_platforms.insert(platform_key.clone(), pi);
+                }
+            }
+        }
+    }
 }
 
 // Cache just stores the binary path as a raw string
@@ -241,16 +271,12 @@ struct BinPathCache;
 
 impl BinPathCache {
     fn cache_key(stub_path: &Path) -> Result<String> {
-        let path_str = stub_path.to_string_lossy();
-        let mtime = stub_path.metadata()?.modified()?;
-        let mtime_str = format!(
-            "{:?}",
-            mtime
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        Ok(hash::hash_to_str(&format!("{path_str}:{mtime_str}")))
+        let path = std::path::absolute(stub_path).unwrap_or_else(|_| stub_path.to_path_buf());
+        let contents = file::read_to_string(stub_path)?;
+        Ok(hash::hash_sha256_to_str(&format!(
+            "{}\0{contents}",
+            path.to_string_lossy()
+        )))
     }
 
     fn cache_file_path(cache_key: &str) -> PathBuf {
@@ -288,6 +314,15 @@ impl BinPathCache {
 
         file::write(&cache_path, bin_path.to_string_lossy().as_bytes())?;
         Ok(())
+    }
+}
+
+pub(crate) fn invalidate_cache(stub_path: &Path) -> Result<()> {
+    let cache_path = BinPathCache::cache_file_path(&BinPathCache::cache_key(stub_path)?);
+    match std::fs::remove_file(cache_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -527,20 +562,7 @@ async fn execute_with_tool_request(
 
     // Inject lock data from stub into tool versions
     // The toolset contains only the single tool from this stub, so apply to all versions
-    if let Some(lock) = &stub.lock {
-        for (_ba, tvl) in toolset.versions.iter_mut() {
-            for tv in &mut tvl.versions {
-                for (platform_key, lock_platform) in &lock.platforms {
-                    let pi = PlatformInfo {
-                        url: lock_platform.url.clone(),
-                        checksum: lock_platform.checksum.clone(),
-                        ..Default::default()
-                    };
-                    tv.lock_platforms.insert(platform_key.clone(), pi);
-                }
-            }
-        }
-    }
+    stub.apply_lock(&mut toolset, stub_path);
 
     // Ensure we have current versions after resolving
     ensure!(
@@ -697,38 +719,4 @@ impl ToolStub {
 
         return execute_with_tool_request(&stub, &mut config, args, &self.file).await;
     }
-}
-
-pub(crate) async fn short_circuit_stub(args: &[String]) -> Result<()> {
-    // Early return if no args or not enough args for a stub
-    if args.is_empty() {
-        return Ok(());
-    }
-
-    // Check if the first argument looks like a tool stub file path
-    let potential_stub_path = std::path::Path::new(&args[0]);
-
-    // Only proceed if it's an existing file with a reasonable extension
-    if !potential_stub_path.exists() {
-        return Ok(());
-    }
-
-    // Generate cache key from file path and mtime
-    let cache_key = BinPathCache::cache_key(potential_stub_path)?;
-
-    // Check if we have a cached binary path
-    if let Some(bin_path) = BinPathCache::load(&cache_key) {
-        let args = args[1..].to_vec();
-        return crate::cli::exec::exec_program(
-            bin_path,
-            args,
-            BTreeMap::new(),
-            &Default::default(),
-            false,
-        )
-        .await;
-    }
-
-    // No cache hit, return Ok(()) to continue with normal processing
-    Ok(())
 }

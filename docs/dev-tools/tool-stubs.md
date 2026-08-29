@@ -14,6 +14,38 @@ Tool stubs can use any mise backend but because they default to http—and http 
 Tool stubs are particularly useful for adding less-commonly used tools to your mise setup. Since tools are only installed when their stub is first executed, you can define many tools without the overhead of installing them all upfront. This is perfect for specialized tools, testing utilities, or project-specific binaries that you might not use every day.
 :::
 
+## Managed Tool-Stub Bundles
+
+Use a bundle manifest when a project or operating-system setup needs to publish several commands into a bin directory:
+
+```toml
+[commands]
+rg = "ripgrep@14"
+node = { version = "22", bin = "node" }
+prettier = { tool = "npm:prettier", version = "3", bin = "prettier" }
+```
+
+Synchronize it into `~/.local/bin` (the default), or choose another directory:
+
+```bash
+mise tool-stubs sync ./tool-stubs.toml
+mise tool-stubs sync ./tool-stubs.toml --into ./bin
+```
+
+Sync only writes executable stubs; it does not install any of the declared tools. Each tool remains lazy and is installed when its command is first invoked. Generated files carry an ownership marker and mise records their hashes. An existing unowned file, or a generated file edited since the last sync, is never overwritten unless `--force` is passed.
+
+Use `status` to audit a bundle, `upgrade` to update already-installed versions selected by its stubs, and `remove` to delete the owned command files without uninstalling their tools:
+
+```bash
+mise tool-stubs status ./tool-stubs.toml
+mise tool-stubs status ./tool-stubs.toml --json
+mise tool-stubs status ./tool-stubs.toml --missing
+mise tool-stubs upgrade ./tool-stubs.toml
+mise tool-stubs remove ./tool-stubs.toml
+```
+
+`mise upgrade --tool-stubs` includes all tracked stubs in a normal upgrade. Replaced versions follow the same `upgrade.prune_after`, `--prune`, and `--no-prune` behavior as config-selected tools.
+
 ## Tool (non-http) Stubs
 
 ```bash
@@ -342,11 +374,11 @@ mise tool-stub ./bin/my-tool --version
 
 Tool stubs implement intelligent caching which reduces the overhead mise has when running stubs:
 
-- Binary paths are cached based on stub file path and modification time
-- Cache is automatically invalidated when the stub file changes
+- Binary paths are cached based on the stub path and content hash
+- Cache is automatically invalidated when the stub contents change or a selected version is upgraded
 - Missing binaries trigger cache cleanup automatically
 
-Cached stubs have ~4ms of overhead.
+The cached binary still runs through normal tool-stub environment resolution. This preserves backend dependencies, tool environment variables, and project path entries rather than executing with an incomplete cached environment.
 
 ## Pruning
 

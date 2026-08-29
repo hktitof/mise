@@ -150,7 +150,7 @@ impl Display for ToolArg {
     }
 }
 
-fn parse_input(s: &str) -> (&str, Option<&str>) {
+pub(crate) fn parse_input(s: &str) -> (&str, Option<&str>) {
     let Some((left, right)) = s.split_once('@') else {
         return (s, None);
     };
