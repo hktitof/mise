@@ -81,6 +81,10 @@ assert_contains "mise ls --installed dummy" "1.0.0"
 
 # The top-level upgrade flag covers every tracked stub as well.
 mise uninstall dummy@1.1.0
+# One repurposed tracked path must not block the remaining valid stubs.
+printf 'not a tool stub\n' >bad-stub
+mkdir -p "$MISE_STATE_DIR/tracked-stubs"
+ln -s "$PWD/bad-stub" "$MISE_STATE_DIR/tracked-stubs/bad-stub"
 assert_fail_contains "mise upgrade --tool-stubs --dry-run-code --no-prune 2>&1" "Would install dummy@1.1.0"
 mise upgrade --tool-stubs --no-prune
 assert_contains "mise ls --installed dummy" "1.1.0"

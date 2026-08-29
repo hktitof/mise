@@ -177,11 +177,31 @@ pub(crate) async fn upgrade_tool_stub_paths(
     let mut toolset = Toolset::new(ToolSource::Unknown);
     let mut stubs = vec![];
     for path in paths {
-        let stub = crate::cli::tool_stub::ToolStubFile::from_file(&path).wrap_err_with(|| {
-            format!("failed to load tracked tool stub {}", display_path(&path))
-        })?;
-        toolset.add_version(stub.to_tool_request(&path)?);
+        let stub = match crate::cli::tool_stub::ToolStubFile::from_file(&path) {
+            Ok(stub) => stub,
+            Err(err) => {
+                warn!(
+                    "error loading tracked tool stub {}: {err:#}",
+                    display_path(&path)
+                );
+                continue;
+            }
+        };
+        let request = match stub.to_tool_request(&path) {
+            Ok(request) => request,
+            Err(err) => {
+                warn!(
+                    "error resolving tracked tool stub {}: {err:#}",
+                    display_path(&path)
+                );
+                continue;
+            }
+        };
+        toolset.add_version(request);
         stubs.push((path, stub));
+    }
+    if stubs.is_empty() {
+        return Ok(false);
     }
     toolset.resolve(&config).await?;
     for (path, stub) in &stubs {
