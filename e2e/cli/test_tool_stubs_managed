@@ -139,6 +139,33 @@ EOF
 mise tool-stub sync stubs.toml
 assert_fail "test -e bin/aa-rollback-old"
 
+# Stale reconciliation and removal preserve commands currently owned by a
+# different bundle sharing the destination, even under --force.
+mkdir shared-bin
+cat >bundle-a.toml <<'EOF'
+[commands]
+shared-command = { tool = "dummy", version = "1", bin = "dummy" }
+EOF
+cat >bundle-b.toml <<'EOF'
+[commands]
+shared-command = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+mise tool-stub sync bundle-a.toml --into ./shared-bin
+mise tool-stub sync bundle-b.toml --into ./shared-bin --force
+printf '[commands]\n' >bundle-a.toml
+mise tool-stub sync bundle-a.toml --into ./shared-bin --force
+assert_contains "mise tool-stub status bundle-b.toml --into ./shared-bin" "current   shared-command"
+
+cat >bundle-a.toml <<'EOF'
+[commands]
+shared-command = { tool = "dummy", version = "1", bin = "dummy" }
+EOF
+mise tool-stub sync bundle-a.toml --into ./shared-bin --force
+mise tool-stub sync bundle-b.toml --into ./shared-bin --force
+mise tool-stub remove bundle-a.toml --into ./shared-bin --force
+assert_contains "mise tool-stub status bundle-b.toml --into ./shared-bin" "current   shared-command"
+mise tool-stub remove bundle-b.toml --into ./shared-bin
+
 # --missing is concise enough for provisioning scripts.
 rm bin/dummy-one
 assert "mise tool-stub status stubs.toml --missing" "dummy-one"

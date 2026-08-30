@@ -308,6 +308,9 @@ impl Sync {
                 }
                 validate_managed_path(state, name, &managed.path)?;
                 if path_exists(&managed.path) {
+                    if file_is_owned_by_another_bundle(&managed.path, &bundle.id) {
+                        continue;
+                    }
                     let unchanged = !managed.path.is_symlink()
                         && managed.path.is_file()
                         && file_hash(&managed.path)? == managed.content_hash;
@@ -378,7 +381,7 @@ impl Sync {
             }
             if let Some(state) = &bundle.state {
                 for (name, managed) in &state.commands {
-                    if !desired.contains_key(name) {
+                    if !desired.contains_key(name) && changes.contains_key(name) {
                         Tracker::untrack_stub(&managed.path)?;
                     }
                 }
@@ -871,9 +874,14 @@ fn remove_bundle(mut bundle: Bundle, force: bool) -> Result<()> {
         return Ok(());
     };
 
+    let mut preserved = BTreeSet::new();
     for (name, managed) in &state.commands {
         validate_managed_path(&state, name, &managed.path)?;
         if path_exists(&managed.path) {
+            if file_is_owned_by_another_bundle(&managed.path, &state.id) {
+                preserved.insert(managed.path.clone());
+                continue;
+            }
             let unchanged = !managed.path.is_symlink()
                 && managed.path.is_file()
                 && file_hash(&managed.path)? == managed.content_hash;
@@ -885,6 +893,9 @@ fn remove_bundle(mut bundle: Bundle, force: bool) -> Result<()> {
         }
     }
     for managed in state.commands.values() {
+        if preserved.contains(&managed.path) {
+            continue;
+        }
         if path_exists(&managed.path) {
             file::remove_file(&managed.path)?;
             info!("removed {}", display_path(&managed.path));
@@ -1241,13 +1252,21 @@ fn classify_path(
 }
 
 fn file_is_owned_by_bundle(path: &Path, bundle_id: &str) -> bool {
+    file_bundle_owner(path).as_deref() == Some(bundle_id)
+}
+
+fn file_is_owned_by_another_bundle(path: &Path, bundle_id: &str) -> bool {
+    file_bundle_owner(path).is_some_and(|owner| owner != bundle_id)
+}
+
+fn file_bundle_owner(path: &Path) -> Option<String> {
     let contents = match file::read_to_string(path) {
         Ok(contents) => contents,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     contents
         .lines()
-        .any(|line| line == format!("{MANAGED_MARKER_PREFIX}{bundle_id}"))
+        .find_map(|line| line.strip_prefix(MANAGED_MARKER_PREFIX).map(str::to_owned))
 }
 
 fn path_exists(path: &Path) -> bool {
