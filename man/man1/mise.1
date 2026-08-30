@@ -745,21 +745,18 @@ Display the GitLab token mise will use for a given host
 Gets information about a tool
 .TP
 \fBtool\-stub\fR
-Execute a tool stub
+Execute and manage tool stubs
 .TP
-\fBtool\-stubs\fR
-Manage executable tool stubs declared in mise configuration
-.TP
-\fBtool\-stubs sync\fR
+\fBtool\-stub sync\fR
 Create or update executable stubs declared in configuration
 .TP
-\fBtool\-stubs status\fR
+\fBtool\-stub status\fR
 Show whether generated stubs match their source configuration and ownership state
 .TP
-\fBtool\-stubs upgrade\fR
+\fBtool\-stub upgrade\fR
 Upgrade versions selected by managed tool stubs
 .TP
-\fBtool\-stubs remove\fR
+\fBtool\-stub remove\fR
 Remove command files owned by a synchronized bundle
 .TP
 \fBtrust\fR
@@ -5514,7 +5511,7 @@ Print help
 \fB<TOOL>\fR
 Tool name to get information about
 .SH "MISE TOOL-STUB"
-Execute a tool stub
+Execute and manage tool stubs
 
 Tool stubs are executable files containing TOML configuration that specify which tool to run and how to run it. They provide a convenient way to create portable, self\-contained executables that automatically manage tool installation and execution.
 
@@ -5533,11 +5530,11 @@ version = "20.0.0"
 bin = "node"
 ```
 
-The stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub.
+The stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub. Management subcommands synchronize the `[tool_stubs]` catalogues declared in user and system config.
 
 For more information, see: https://mise.jdx.dev/dev\-tools/tool\-stubs.html
 .PP
-\fBUsage:\fR mise tool\-stub <FILE> [<ARGS>] ...
+\fBUsage:\fR mise tool\-stub [<FILE>] [<ARGS>] ... [COMMAND]
 .PP
 \fBArguments:\fR
 .PP
@@ -5551,31 +5548,10 @@ The stub file must contain TOML configuration specifying the tool and version to
 Arguments to pass to the tool
 
 All arguments after the stub file path will be forwarded to the underlying tool. Use '\-\-' to separate mise arguments from tool arguments if needed.
-.SH "MISE TOOL-STUBS"
-Manage executable tool stubs declared in mise configuration
-
-Normal system and user configs declare commands under `[tool_stubs]`.
-String values use `tool@version` syntax; tables accept the same fields as
-`mise tool\-stub`. Syncing writes executable stubs without installing their
-tools. The first invocation installs its declared version lazily.
-
-```toml
-[tool_stubs]
-rg = "ripgrep@14"
-node = { version = "22", bin = "node" }
-```
-.PP
-\fBUsage:\fR mise tool\-stubs [OPTIONS] <COMMAND>
-.PP
-\fBOptions:\fR
-.PP
-.TP
-\fB\-h, \-\-help\fR
-Print help
-.SH "MISE TOOL-STUBS SYNC"
+.SH "MISE TOOL-STUB SYNC"
 Create or update executable stubs declared in configuration
 .PP
-\fBUsage:\fR mise tool\-stubs sync [OPTIONS] [<MANIFEST>]
+\fBUsage:\fR mise tool\-stub sync [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
@@ -5596,10 +5572,10 @@ Print help
 .TP
 \fB<MANIFEST>\fR
 Custom manifest; omit to read [tool_stubs] from the selected config scope
-.SH "MISE TOOL-STUBS STATUS"
+.SH "MISE TOOL-STUB STATUS"
 Show whether generated stubs match their source configuration and ownership state
 .PP
-\fBUsage:\fR mise tool\-stubs status [OPTIONS] [<MANIFEST>]
+\fBUsage:\fR mise tool\-stub status [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
@@ -5623,10 +5599,10 @@ Print help
 .TP
 \fB<MANIFEST>\fR
 Custom manifest; omit to read [tool_stubs] from the selected config scope
-.SH "MISE TOOL-STUBS UPGRADE"
+.SH "MISE TOOL-STUB UPGRADE"
 Upgrade versions selected by managed tool stubs
 .PP
-\fBUsage:\fR mise tool\-stubs upgrade [OPTIONS] [<MANIFEST>]
+\fBUsage:\fR mise tool\-stub upgrade [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
@@ -5662,10 +5638,10 @@ Print help
 .TP
 \fB<MANIFEST>\fR
 Custom manifest whose managed stubs should be upgraded; omit for tracked stubs
-.SH "MISE TOOL-STUBS REMOVE"
+.SH "MISE TOOL-STUB REMOVE"
 Remove command files owned by a synchronized bundle
 .PP
-\fBUsage:\fR mise tool\-stubs remove [OPTIONS] [<MANIFEST>]
+\fBUsage:\fR mise tool\-stub remove [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
