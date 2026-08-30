@@ -24,6 +24,12 @@ assert_contains "PATH='$MISE_DATA_DIR/tool-stubs/bin:$MISE_SYSTEM_DATA_DIR/tool-
 assert_contains "PATH='$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 1.1.0"
 assert_contains "mise activate bash --no-hook-env" "$MISE_SYSTEM_DATA_DIR/tool-stubs/bin"
 assert_contains "mise activate bash --no-hook-env" "$MISE_DATA_DIR/tool-stubs/bin"
+mkdir -p "$MISE_DATA_DIR/shims"
+cat >check-shim-precedence.sh <<'EOF'
+eval "$(mise activate bash --shims)"
+test "${PATH%%:*}" = "$MISE_DATA_DIR/shims"
+EOF
+assert "PATH='$MISE_DATA_DIR/shims:$PATH' bash check-shim-precedence.sh"
 mise uninstall dummy@1.1.0
 mise install dummy@1.0.0
 assert_contains "mise tool-stubs upgrade --system --dry-run" "Would install dummy@1.1.0"

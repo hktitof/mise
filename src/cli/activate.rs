@@ -119,8 +119,12 @@ impl Activate {
         } else {
             false
         };
-        self.prepend_tool_stub_paths(shell, &mut prelude);
-        if let Some(p) = self.shims_prepend_path(shell, &dirs::SHIMS, prepended_exe_dir) {
+        let prepended_tool_stubs = self.prepend_tool_stub_paths(shell, &mut prelude);
+        if let Some(p) = self.shims_prepend_path(
+            shell,
+            &dirs::SHIMS,
+            prepended_exe_dir || prepended_tool_stubs,
+        ) {
             prelude.push(p);
         }
         miseprint!("{}", shell.format_activate_prelude(&prelude))?;
@@ -182,7 +186,11 @@ impl Activate {
     /// System stubs are prepended first so the later user prepend wins. Both
     /// remain behind configured tool paths (or shims), which are the more
     /// specific selection when a command exists in both places.
-    fn prepend_tool_stub_paths(&self, shell: &dyn Shell, prelude: &mut Vec<ActivatePrelude>) {
+    fn prepend_tool_stub_paths(
+        &self,
+        shell: &dyn Shell,
+        prelude: &mut Vec<ActivatePrelude>,
+    ) -> bool {
         let system = &*dirs::SYSTEM_TOOL_STUBS;
         let user = &*dirs::TOOL_STUBS;
         let system_valid = system.is_dir() && is_dir_not_in_nix(system) && !system.is_relative();
@@ -197,7 +205,7 @@ impl Activate {
                     ));
                 }
             }
-            return;
+            return system_valid || user_valid;
         }
 
         let system_prepended = system_valid && !is_dir_in_path(system);
@@ -213,7 +221,9 @@ impl Activate {
                 PATH_KEY.to_string(),
                 user.to_string_lossy().to_string(),
             ));
+            return true;
         }
+        system_prepended
     }
 
     /// Used by activate_shims for the shims directory. Shells with native path
