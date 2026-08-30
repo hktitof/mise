@@ -13,7 +13,9 @@ use crate::config::tracking::Tracker;
 use crate::file::{self, display_path};
 
 const STATE_SCHEMA_VERSION: u8 = 1;
+const TRANSACTION_SCHEMA_VERSION: u8 = 1;
 const MANAGED_MARKER_PREFIX: &str = "# managed by mise tool-stubs bundle ";
+const TRANSACTION_DIR_PREFIX: &str = ".mise-tool-stubs-transaction-";
 
 /// Manage executable tool stubs declared in mise configuration
 ///
@@ -193,14 +195,30 @@ struct Bundle {
 }
 
 struct SyncFileTransaction {
-    backup: tempfile::TempDir,
-    backed_up: Vec<(PathBuf, PathBuf)>,
-    installed: Vec<PathBuf>,
+    path: PathBuf,
+    originals: PathBuf,
 }
 
-enum StateRollback {
-    Replace(file::PreparedAtomicWrite),
-    Remove(PathBuf),
+#[derive(Debug, Deserialize, Serialize)]
+struct SyncTransactionRecord {
+    schema_version: u8,
+    bundle_id: String,
+    into: PathBuf,
+    state_before: Option<BundleState>,
+    changes: BTreeMap<String, TransactionChange>,
+    tracking_before: Vec<TrackedStubSnapshot>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TransactionChange {
+    had_original: bool,
+    installed_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TrackedStubSnapshot {
+    path: PathBuf,
+    tracked: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -236,8 +254,10 @@ impl Sync {
     async fn run(self) -> Result<()> {
         let mut bundle =
             resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
+        file::create_dir_all(&bundle.into)?;
         let _into_lock = crate::lock_file::get(&bundle.into, false)?;
         let _lock = crate::lock_file::get(&bundle.state_path, false)?;
+        recover_interrupted_sync(&bundle)?;
         bundle.state = load_state(&bundle.state_path)?;
         if let Some(state) = &bundle.state {
             for (name, command) in &state.commands {
@@ -265,7 +285,6 @@ impl Sync {
             bail!("refusing to overwrite tool stubs not safely owned by this bundle: {details}");
         }
 
-        file::create_dir_all(&bundle.into)?;
         let status_by_name = statuses
             .iter()
             .map(|status| (status.command.as_str(), status.status))
@@ -327,7 +346,6 @@ impl Sync {
             .parent()
             .expect("tool-stub bundle state has a parent directory");
         file::create_dir_all(state_parent)?;
-        let state_rollback = prepare_state_rollback(&bundle.state_path)?;
         let prepared_state = prepare_state_write(&bundle.state_path, &final_state)?;
 
         let affected_paths = bundle
@@ -341,11 +359,12 @@ impl Sync {
             .iter()
             .map(|path| Ok((path.clone(), Tracker::is_stub_tracked(path)?)))
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let mut transaction = SyncFileTransaction::new(&bundle.into)?;
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &tracking_snapshot)?;
         let commit_result = (|| -> Result<()> {
             for (name, (path, _)) in &changes {
                 transaction.back_up(name, path)?;
             }
+            transaction.sync_backups(&bundle.into)?;
             for (name, (path, staged_path)) in &changes {
                 if let Some(staged_path) = staged_path {
                     transaction.install(staged_path, path)?;
@@ -364,27 +383,23 @@ impl Sync {
                     }
                 }
             }
-            prepared_state.commit()
+            prepared_state.commit()?;
+            transaction.mark_committed()
         })();
 
         if let Err(err) = commit_result {
-            let mut rollback_errors = Vec::new();
-            if let Err(rollback_err) = state_rollback.restore() {
-                rollback_errors.push(format!("bundle state: {rollback_err:#}"));
-            }
-            if let Err(rollback_err) = transaction.rollback() {
-                rollback_errors.push(format!("command files: {rollback_err:#}"));
-            }
-            if let Err(rollback_err) = restore_tracking(&tracking_snapshot) {
-                rollback_errors.push(format!("tracked stubs: {rollback_err:#}"));
-            }
-            if rollback_errors.is_empty() {
-                return Err(err);
-            }
-            return Err(err.wrap_err(format!(
-                "failed to roll back tool-stub sync: {}",
-                rollback_errors.join("; ")
-            )));
+            return match transaction.rollback(&bundle) {
+                Ok(()) => Err(err),
+                Err(rollback_err) => Err(err.wrap_err(format!(
+                    "failed to roll back tool-stub sync: {rollback_err:#}"
+                ))),
+            };
+        }
+
+        if let Err(err) = transaction.finish() {
+            warn!(
+                "failed to remove completed tool-stub transaction; the next sync will clean it up: {err:#}"
+            );
         }
 
         for (_, (path, staged_path)) in changes {
@@ -397,17 +412,62 @@ impl Sync {
 }
 
 impl SyncFileTransaction {
-    fn new(into: &Path) -> Result<Self> {
-        Ok(Self {
-            backup: tempfile::Builder::new()
-                .prefix(".mise-tool-stubs-backup-")
-                .tempdir_in(into)?,
-            backed_up: Vec::new(),
-            installed: Vec::new(),
-        })
+    fn begin(
+        bundle: &Bundle,
+        changes: &BTreeMap<String, (PathBuf, Option<PathBuf>)>,
+        tracking_before: &BTreeMap<PathBuf, bool>,
+    ) -> Result<Self> {
+        let path = transaction_path(bundle);
+        ensure!(
+            !path_exists(&path),
+            "tool-stub transaction already exists at {}",
+            display_path(&path)
+        );
+        fs::create_dir(&path)?;
+        let originals = path.join("originals");
+        let setup_result = (|| -> Result<()> {
+            fs::create_dir(&originals)?;
+            let changes = changes
+                .iter()
+                .map(|(name, (destination, staged_path))| {
+                    Ok((
+                        name.clone(),
+                        TransactionChange {
+                            had_original: path_exists(destination),
+                            installed_hash: staged_path.as_deref().map(file_hash).transpose()?,
+                        },
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let record = SyncTransactionRecord {
+                schema_version: TRANSACTION_SCHEMA_VERSION,
+                bundle_id: bundle.id.clone(),
+                into: bundle.into.clone(),
+                state_before: bundle.state.clone(),
+                changes,
+                tracking_before: tracking_before
+                    .iter()
+                    .map(|(path, tracked)| TrackedStubSnapshot {
+                        path: path.clone(),
+                        tracked: *tracked,
+                    })
+                    .collect(),
+            };
+            write_transaction_record(&path, &record)?;
+            file::sync_dir(&bundle.into)
+        })();
+        if let Err(err) = setup_result {
+            if let Err(cleanup_err) = remove_transaction_dir(&path) {
+                return Err(err.wrap_err(format!(
+                    "failed to clean up incomplete tool-stub transaction: {cleanup_err:#}"
+                )));
+            }
+            return Err(err);
+        }
+        Ok(Self { path, originals })
     }
 
-    fn back_up(&mut self, name: &str, path: &Path) -> Result<()> {
+    fn back_up(&self, name: &str, path: &Path) -> Result<()> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -418,83 +478,268 @@ impl SyncFileTransaction {
             "refusing to replace directory {}; remove it first",
             display_path(path)
         );
-        let backup_path = self.backup.path().join(name);
+        let backup_path = self.originals.join(name);
         fs::rename(path, &backup_path)
             .wrap_err_with(|| format!("failed to back up tool stub {}", display_path(path)))?;
-        self.backed_up.push((path.to_path_buf(), backup_path));
         Ok(())
     }
 
-    fn install(&mut self, staged_path: &Path, path: &Path) -> Result<()> {
+    fn install(&self, staged_path: &Path, path: &Path) -> Result<()> {
         fs::rename(staged_path, path)
             .wrap_err_with(|| format!("failed to install tool stub {}", display_path(path)))?;
-        self.installed.push(path.to_path_buf());
         Ok(())
     }
 
-    fn rollback(self) -> Result<()> {
-        let Self {
-            backup,
-            backed_up,
-            installed,
-        } = self;
-        let mut errors = Vec::new();
-        for path in installed.into_iter().rev() {
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => errors.push(format!("{}: {err}", display_path(path))),
-            }
+    fn sync_backups(&self, into: &Path) -> Result<()> {
+        file::sync_dir(&self.originals)?;
+        file::sync_dir(into)
+    }
+
+    fn mark_committed(&self) -> Result<()> {
+        file::prepare_atomic_write(transaction_commit_path(&self.path), b"committed\n")?.commit()
+    }
+
+    fn rollback(self, bundle: &Bundle) -> Result<()> {
+        let record = read_transaction_record(&self.path)?;
+        rollback_transaction(bundle, &self.path, &record)
+    }
+
+    fn finish(self) -> Result<()> {
+        remove_transaction_dir(&self.path)
+    }
+}
+
+fn transaction_path(bundle: &Bundle) -> PathBuf {
+    bundle
+        .into
+        .join(format!("{TRANSACTION_DIR_PREFIX}{}", bundle.id))
+}
+
+fn transaction_record_path(transaction_path: &Path) -> PathBuf {
+    transaction_path.join("transaction.json")
+}
+
+fn transaction_commit_path(transaction_path: &Path) -> PathBuf {
+    transaction_path.join("committed")
+}
+
+fn transaction_is_committed(transaction_path: &Path) -> Result<bool> {
+    let path = transaction_commit_path(transaction_path);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    ensure!(
+        metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+        "invalid tool-stub transaction commit marker {}",
+        display_path(&path)
+    );
+    ensure!(
+        fs::read(&path)? == b"committed\n",
+        "invalid tool-stub transaction commit marker {}",
+        display_path(&path)
+    );
+    Ok(true)
+}
+
+fn write_transaction_record(path: &Path, record: &SyncTransactionRecord) -> Result<()> {
+    let mut contents = serde_json::to_vec_pretty(record)?;
+    contents.push(b'\n');
+    file::prepare_atomic_write(transaction_record_path(path), contents)?.commit()
+}
+
+fn read_transaction_record(path: &Path) -> Result<SyncTransactionRecord> {
+    let record_path = transaction_record_path(path);
+    serde_json::from_str(&file::read_to_string(&record_path)?)
+        .wrap_err_with(|| format!("failed to parse {}", display_path(record_path)))
+}
+
+fn recover_interrupted_sync(bundle: &Bundle) -> Result<()> {
+    let path = transaction_path(bundle);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    ensure!(
+        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+        "invalid tool-stub transaction path {}",
+        display_path(&path)
+    );
+
+    let record = match read_transaction_record(&path) {
+        Ok(record) => record,
+        Err(_err) if !transaction_record_path(&path).exists() => {
+            // The record is committed before any command is moved, so a directory
+            // without it is safe to discard after an interruption during setup.
+            remove_transaction_dir(&path)?;
+            return Ok(());
         }
-        for (path, backup_path) in backed_up.into_iter().rev() {
-            if let Err(err) = fs::rename(&backup_path, &path) {
-                errors.push(format!("{}: {err}", display_path(path)));
-            }
+        Err(err) => return Err(err),
+    };
+    validate_transaction_record(bundle, &record)?;
+
+    if transaction_is_committed(&path)? {
+        remove_transaction_dir(&path)?;
+        return Ok(());
+    }
+
+    warn!(
+        "recovering interrupted tool-stub sync from {}",
+        display_path(&path)
+    );
+    rollback_transaction(bundle, &path, &record)
+}
+
+fn validate_transaction_record(bundle: &Bundle, record: &SyncTransactionRecord) -> Result<()> {
+    ensure!(
+        record.schema_version == TRANSACTION_SCHEMA_VERSION,
+        "unsupported tool-stub transaction version {} in {}",
+        record.schema_version,
+        display_path(transaction_path(bundle))
+    );
+    ensure!(
+        record.bundle_id == bundle.id && record.into == bundle.into,
+        "tool-stub transaction identity does not match {}",
+        display_path(transaction_path(bundle))
+    );
+    if let Some(state) = &record.state_before {
+        ensure!(
+            state.id == bundle.id
+                && state.into == bundle.into
+                && state.id == bundle_id(&state.source_path, &state.into),
+            "previous bundle state does not match tool-stub transaction {}",
+            display_path(transaction_path(bundle))
+        );
+        for (name, command) in &state.commands {
+            validate_managed_path(state, name, &command.path)?;
         }
-        if let Err(err) = file::sync_dir(
-            backup
-                .path()
-                .parent()
-                .expect("tool-stub backup has a parent directory"),
-        ) {
-            errors.push(format!("directory sync: {err:#}"));
-        }
-        if errors.is_empty() {
-            Ok(())
+    }
+    for name in record.changes.keys() {
+        validate_command_name(name)?;
+    }
+    for snapshot in &record.tracking_before {
+        let name = snapshot
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                eyre!(
+                    "invalid tracked stub path {} in tool-stub transaction",
+                    display_path(&snapshot.path)
+                )
+            })?;
+        validate_command_name(name)?;
+        ensure!(
+            snapshot.path == bundle.into.join(name),
+            "invalid tracked stub path {} in tool-stub transaction",
+            display_path(&snapshot.path)
+        );
+    }
+    Ok(())
+}
+
+fn rollback_transaction(
+    bundle: &Bundle,
+    path: &Path,
+    record: &SyncTransactionRecord,
+) -> Result<()> {
+    validate_transaction_record(bundle, record)?;
+    let originals = path.join("originals");
+    let mut errors = Vec::new();
+    for (name, change) in record.changes.iter().rev() {
+        let destination = bundle.into.join(name);
+        let original = originals.join(name);
+        let result = if path_exists(&original) {
+            remove_transaction_destination(&destination, change.installed_hash.as_deref())
+                .and_then(|()| fs::rename(&original, &destination).map_err(Into::into))
+        } else if !change.had_original {
+            remove_transaction_destination(&destination, change.installed_hash.as_deref())
         } else {
-            let backup = backup.keep();
-            bail!(
-                "{}; original files preserved at {}",
-                errors.join("; "),
-                display_path(backup)
-            )
+            Ok(())
+        };
+        if let Err(err) = result {
+            errors.push(format!("{}: {err:#}", display_path(destination)));
         }
+    }
+    if let Err(err) = file::sync_dir(&bundle.into) {
+        errors.push(format!("command directory: {err:#}"));
+    }
+    if let Err(err) = restore_bundle_state(&bundle.state_path, record.state_before.as_ref()) {
+        errors.push(format!("bundle state: {err:#}"));
+    }
+    if let Err(err) = restore_tracking(&record.tracking_before) {
+        errors.push(format!("tracked stubs: {err:#}"));
+    }
+    if errors.is_empty() {
+        remove_transaction_dir(path)
+    } else {
+        bail!(
+            "{}; original files preserved at {}",
+            errors.join("; "),
+            display_path(path)
+        )
     }
 }
 
-impl StateRollback {
-    fn restore(self) -> Result<()> {
-        match self {
-            Self::Replace(replacement) => replacement.commit(),
-            Self::Remove(path) => match fs::remove_file(path) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(err.into()),
-            },
-        }
+fn remove_transaction_destination(path: &Path, installed_hash: Option<&str>) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    ensure!(
+        !metadata.file_type().is_dir(),
+        "refusing to remove directory while recovering {}",
+        display_path(path)
+    );
+    ensure!(
+        !metadata.file_type().is_symlink() && metadata.file_type().is_file(),
+        "refusing to remove a file not installed by the interrupted sync: {}",
+        display_path(path)
+    );
+    let installed_hash = installed_hash.ok_or_else(|| {
+        eyre!(
+            "refusing to remove a file not installed by the interrupted sync: {}",
+            display_path(path)
+        )
+    })?;
+    ensure!(
+        file_hash(path)? == installed_hash,
+        "refusing to remove a file changed after the interrupted sync: {}",
+        display_path(path)
+    );
+    fs::remove_file(path).map_err(Into::into)
+}
+
+fn restore_bundle_state(path: &Path, state: Option<&BundleState>) -> Result<()> {
+    match state {
+        Some(state) => prepare_state_write(path, state)?.commit(),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        },
     }
 }
 
-fn prepare_state_rollback(path: &Path) -> Result<StateRollback> {
-    match fs::read(path) {
-        Ok(contents) => Ok(StateRollback::Replace(file::prepare_atomic_write(
-            path, contents,
-        )?)),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            Ok(StateRollback::Remove(path.to_path_buf()))
-        }
-        Err(err) => Err(err.into()),
+fn remove_transaction_dir(path: &Path) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    ensure!(
+        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+        "refusing to remove invalid tool-stub transaction path {}",
+        display_path(path)
+    );
+    fs::remove_dir_all(path)?;
+    if let Some(parent) = path.parent() {
+        file::sync_dir(parent)?;
     }
+    Ok(())
 }
 
 fn prepare_state_write(path: &Path, state: &BundleState) -> Result<file::PreparedAtomicWrite> {
@@ -503,16 +748,16 @@ fn prepare_state_write(path: &Path, state: &BundleState) -> Result<file::Prepare
     file::prepare_atomic_write(path, contents)
 }
 
-fn restore_tracking(snapshot: &BTreeMap<PathBuf, bool>) -> Result<()> {
+fn restore_tracking(snapshot: &[TrackedStubSnapshot]) -> Result<()> {
     let mut errors = Vec::new();
-    for (path, tracked) in snapshot {
-        let result = if *tracked {
-            Tracker::track_stub(path)
+    for snapshot in snapshot {
+        let result = if snapshot.tracked {
+            Tracker::track_stub(&snapshot.path)
         } else {
-            Tracker::untrack_stub(path)
+            Tracker::untrack_stub(&snapshot.path)
         };
         if let Err(err) = result {
-            errors.push(format!("{}: {err:#}", display_path(path)));
+            errors.push(format!("{}: {err:#}", display_path(&snapshot.path)));
         }
     }
     if errors.is_empty() {
@@ -866,7 +1111,8 @@ fn validate_command_name(name: &str) -> Result<()> {
         path.file_name().and_then(|part| part.to_str()) == Some(name)
             && path.components().count() == 1
             && name != "."
-            && name != "..",
+            && name != ".."
+            && !name.starts_with(".mise-tool-stubs-"),
         "command name must be a single file name: {name}"
     );
     Ok(())
@@ -1035,6 +1281,7 @@ mod tests {
     fn rejects_command_paths() {
         assert!(validate_command_name("bin/rg").is_err());
         assert!(validate_command_name("..").is_err());
+        assert!(validate_command_name(".mise-tool-stubs-transaction-owned").is_err());
         assert!(validate_command_name("rg").is_ok());
     }
 
@@ -1122,5 +1369,111 @@ mod tests {
         let states = list_states_in(tmp.path()).unwrap();
         assert_eq!(states.len(), 1);
         assert_eq!(states[0].id, id);
+    }
+
+    #[test]
+    fn recovers_an_interrupted_sync_after_backing_up_a_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        std::fs::create_dir(&into).unwrap();
+        let id = bundle_id(&source_path, &into);
+        let bundle = Bundle {
+            id: id.clone(),
+            source_path,
+            manifest_path: None,
+            into: into.clone(),
+            state_path: tmp.path().join("state").join(format!("{id}.json")),
+            state: None,
+            system: false,
+        };
+        let command = into.join("rg");
+        std::fs::write(&command, "old").unwrap();
+        let changes = BTreeMap::from([("rg".into(), (command.clone(), None))]);
+
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &BTreeMap::new()).unwrap();
+        transaction.back_up("rg", &command).unwrap();
+        drop(transaction);
+
+        assert!(!command.exists());
+        recover_interrupted_sync(&bundle).unwrap();
+        assert_eq!(std::fs::read_to_string(command).unwrap(), "old");
+        assert!(!transaction_path(&bundle).exists());
+    }
+
+    #[test]
+    fn recovery_preserves_a_file_created_after_interruption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        std::fs::create_dir(&into).unwrap();
+        let id = bundle_id(&source_path, &into);
+        let bundle = Bundle {
+            id: id.clone(),
+            source_path,
+            manifest_path: None,
+            into: into.clone(),
+            state_path: tmp.path().join("state").join(format!("{id}.json")),
+            state: None,
+            system: false,
+        };
+        let command = into.join("rg");
+        let staged = into.join("staged-rg");
+        std::fs::write(&staged, "generated").unwrap();
+        let changes = BTreeMap::from([("rg".into(), (command.clone(), Some(staged)))]);
+
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &BTreeMap::new()).unwrap();
+        drop(transaction);
+        std::fs::write(&command, "user-created").unwrap();
+
+        assert!(recover_interrupted_sync(&bundle).is_err());
+        assert_eq!(std::fs::read_to_string(command).unwrap(), "user-created");
+        assert!(transaction_path(&bundle).exists());
+    }
+
+    #[test]
+    fn committed_sync_is_not_rolled_back_during_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        std::fs::create_dir(&into).unwrap();
+        let id = bundle_id(&source_path, &into);
+        let state_path = tmp.path().join("state").join(format!("{id}.json"));
+        let bundle = Bundle {
+            id: id.clone(),
+            source_path: source_path.clone(),
+            manifest_path: None,
+            into: into.clone(),
+            state_path: state_path.clone(),
+            state: None,
+            system: false,
+        };
+        let command = into.join("rg");
+        let staged = into.join("staged-rg");
+        std::fs::write(&command, "old").unwrap();
+        std::fs::write(&staged, "new").unwrap();
+        let changes = BTreeMap::from([("rg".into(), (command.clone(), Some(staged.clone())))]);
+
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &BTreeMap::new()).unwrap();
+        transaction.back_up("rg", &command).unwrap();
+        transaction.install(&staged, &command).unwrap();
+        save_state(
+            &state_path,
+            &BundleState {
+                schema_version: STATE_SCHEMA_VERSION,
+                id,
+                source_path,
+                source_hash: "source".into(),
+                into,
+                commands: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        transaction.mark_committed().unwrap();
+        drop(transaction);
+
+        recover_interrupted_sync(&bundle).unwrap();
+        assert_eq!(std::fs::read_to_string(command).unwrap(), "new");
+        assert!(!transaction_path(&bundle).exists());
     }
 }
