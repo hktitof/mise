@@ -6,21 +6,22 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::args::parse_tool_arg_input;
+use crate::config::provenance::{ConfigFileScope, ConfigProvenance};
 use crate::config::tracking::Tracker;
 use crate::file::{self, display_path};
 
 const STATE_SCHEMA_VERSION: u8 = 1;
 const MANAGED_MARKER_PREFIX: &str = "# managed by mise tool-stubs bundle ";
 
-/// Manage executable tool-stub bundles from a TOML manifest
+/// Manage executable tool stubs declared in mise configuration
 ///
-/// A manifest declares commands under `[commands]`. String values use
-/// `tool@version` syntax; tables accept the same fields as `mise tool-stub`.
-/// Syncing writes executable stubs without installing their tools. The first
-/// invocation of each stub installs its declared version lazily.
+/// Normal system and user configs declare commands under `[tool_stubs]`.
+/// String values use `tool@version` syntax; tables accept the same fields as
+/// `mise tool-stub`. Syncing writes executable stubs without installing their
+/// tools. The first invocation installs its declared version lazily.
 ///
 /// ```toml
-/// [commands]
+/// [tool_stubs]
 /// rg = "ripgrep@14"
 /// node = { version = "22", bin = "node" }
 /// ```
@@ -42,26 +43,26 @@ enum Commands {
 impl ToolStubs {
     pub(crate) async fn run(self) -> Result<()> {
         match self.command {
-            Commands::Sync(cmd) => cmd.run(),
-            Commands::Status(cmd) => cmd.run(),
+            Commands::Sync(cmd) => cmd.run().await,
+            Commands::Status(cmd) => cmd.run().await,
             Commands::Upgrade(cmd) => cmd.run().await,
             Commands::Remove(cmd) => cmd.run(),
         }
     }
 }
 
-/// Create or update the executable stubs declared by a manifest
+/// Create or update executable stubs declared in configuration
 #[derive(Debug, usage_rs::Args)]
 struct Sync {
-    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+    /// Custom manifest; omit to read [tool_stubs] from the selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
 
-    /// Directory in which to write commands [default: ~/.local/share/mise/tool-stubs/bin]
+    /// Directory in which to write commands from a custom manifest
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
 
-    /// Use the system catalogue and system tool-stub bin
+    /// Use [tool_stubs] from system config and the system tool-stub bin
     #[usage(long, conflicts = "into")]
     system: bool,
 
@@ -70,10 +71,10 @@ struct Sync {
     force: bool,
 }
 
-/// Show whether generated stubs match their manifest and ownership state
+/// Show whether generated stubs match their source configuration and ownership state
 #[derive(Debug, usage_rs::Args)]
 struct Status {
-    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+    /// Custom manifest; omit to read [tool_stubs] from the selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
 
@@ -81,7 +82,7 @@ struct Status {
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
 
-    /// Use the system catalogue and system tool-stub bin
+    /// Use [tool_stubs] from system config and the system tool-stub bin
     #[usage(long, conflicts = "into")]
     system: bool,
 
@@ -97,7 +98,7 @@ struct Status {
 /// Upgrade versions selected by managed tool stubs
 #[derive(Debug, usage_rs::Args)]
 struct Upgrade {
-    /// Manifest whose managed stubs should be upgraded; omit to use all tracked stubs
+    /// Custom manifest whose managed stubs should be upgraded; omit for tracked stubs
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
 
@@ -133,7 +134,7 @@ struct Upgrade {
 /// Remove command files owned by a synchronized bundle
 #[derive(Debug, usage_rs::Args)]
 struct Remove {
-    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+    /// Custom manifest; omit to use the synchronized selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
 
@@ -141,7 +142,7 @@ struct Remove {
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
 
-    /// Use the system catalogue and system tool-stub bin
+    /// Use the synchronized system config catalogue and system tool-stub bin
     #[usage(long, conflicts = "into")]
     system: bool,
 
@@ -153,6 +154,12 @@ struct Remove {
 #[derive(Debug, Deserialize)]
 struct Manifest {
     commands: IndexMap<String, toml::Value>,
+}
+
+#[derive(Debug)]
+struct CommandSpec {
+    value: toml::Value,
+    provenance: ConfigProvenance,
 }
 
 #[derive(Clone, Debug)]
@@ -173,8 +180,8 @@ struct ManagedCommand {
 struct BundleState {
     schema_version: u8,
     id: String,
-    manifest_path: PathBuf,
-    manifest_hash: String,
+    source_path: PathBuf,
+    source_hash: String,
     into: PathBuf,
     commands: BTreeMap<String, ManagedCommand>,
 }
@@ -182,10 +189,12 @@ struct BundleState {
 #[derive(Debug)]
 struct Bundle {
     id: String,
-    manifest_path: PathBuf,
+    source_path: PathBuf,
+    manifest_path: Option<PathBuf>,
     into: PathBuf,
     state_path: PathBuf,
     state: Option<BundleState>,
+    system: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -218,13 +227,13 @@ struct CommandStatus {
 }
 
 impl Sync {
-    fn run(self) -> Result<()> {
+    async fn run(self) -> Result<()> {
         let mut bundle =
             resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
         let _into_lock = crate::lock_file::get(&bundle.into, false)?;
         let _lock = crate::lock_file::get(&bundle.state_path, false)?;
         bundle.state = load_state(&bundle.state_path)?;
-        let (manifest_hash, desired) = load_desired(&bundle)?;
+        let (source_hash, desired) = load_desired(&bundle).await?;
         let statuses = collect_status(&bundle, &desired)?;
         let blockers = statuses
             .iter()
@@ -296,8 +305,8 @@ impl Sync {
         let state = BundleState {
             schema_version: STATE_SCHEMA_VERSION,
             id: bundle.id,
-            manifest_path: bundle.manifest_path,
-            manifest_hash,
+            source_path: bundle.source_path,
+            source_hash,
             into: bundle.into,
             commands: managed_commands,
         };
@@ -307,9 +316,9 @@ impl Sync {
 }
 
 impl Status {
-    fn run(self) -> Result<()> {
+    async fn run(self) -> Result<()> {
         let bundle = resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
-        let (_, desired) = load_desired(&bundle)?;
+        let (_, desired) = load_desired(&bundle).await?;
         let mut statuses = collect_status(&bundle, &desired)?;
         if self.missing {
             statuses.retain(|status| status.status != StatusKind::Current);
@@ -341,7 +350,7 @@ impl Upgrade {
             let state = bundle.state.ok_or_else(|| {
                 eyre!(
                     "tool-stub bundle has not been synchronized: {}",
-                    display_path(&bundle.manifest_path)
+                    display_path(&bundle.source_path)
                 )
             })?;
             for (name, command) in &state.commands {
@@ -383,7 +392,7 @@ impl Remove {
         let Some(state) = bundle.state else {
             info!(
                 "tool-stub bundle is not synchronized: {}",
-                display_path(&bundle.manifest_path)
+                display_path(&bundle.source_path)
             );
             return Ok(());
         };
@@ -416,11 +425,15 @@ impl Remove {
     }
 }
 
-fn default_manifest(system: bool) -> PathBuf {
+fn default_config_source(system: bool) -> PathBuf {
     if system {
-        crate::dirs::SYSTEM_CONFIG.join("tool-stubs.toml")
+        crate::env::MISE_SYSTEM_CONFIG_FILE
+            .clone()
+            .unwrap_or_else(|| crate::dirs::SYSTEM_CONFIG.to_path_buf())
     } else {
-        crate::dirs::CONFIG.join("tool-stubs.toml")
+        crate::env::MISE_GLOBAL_CONFIG_FILE
+            .clone()
+            .unwrap_or_else(|| crate::dirs::CONFIG.to_path_buf())
     }
 }
 
@@ -436,10 +449,10 @@ fn absolute(path: &Path) -> Result<PathBuf> {
     std::path::absolute(path).wrap_err_with(|| format!("failed to resolve {}", display_path(path)))
 }
 
-fn bundle_id(manifest_path: &Path, into: &Path) -> String {
+fn bundle_id(source_path: &Path, into: &Path) -> String {
     crate::hash::hash_sha256_to_str(&format!(
         "{}\0{}",
-        manifest_path.to_string_lossy(),
+        source_path.to_string_lossy(),
         into.to_string_lossy()
     ))
 }
@@ -457,33 +470,43 @@ fn state_path(id: &str, system: bool) -> PathBuf {
 }
 
 fn resolve_bundle(manifest: Option<&Path>, into: Option<&Path>, system: bool) -> Result<Bundle> {
-    let manifest_path = absolute(manifest.unwrap_or(&default_manifest(system)))?;
+    ensure!(
+        manifest.is_some() || into.is_none(),
+        "--into requires a manifest argument"
+    );
+    let manifest_path = manifest.map(absolute).transpose()?;
+    let source_path = match &manifest_path {
+        Some(path) => path.clone(),
+        None => absolute(&default_config_source(system))?,
+    };
     let into = match into {
         Some(into) => absolute(into)?,
         None => {
             let matches = list_states(system)?
                 .into_iter()
-                .filter(|state| state.manifest_path == manifest_path)
+                .filter(|state| state.source_path == source_path)
                 .collect::<Vec<_>>();
             match matches.as_slice() {
                 [] => absolute(&default_into(system))?,
                 [state] => state.into.clone(),
                 _ => bail!(
                     "multiple tool-stub bundles use {}; specify --into",
-                    display_path(&manifest_path)
+                    display_path(&source_path)
                 ),
             }
         }
     };
-    let id = bundle_id(&manifest_path, &into);
+    let id = bundle_id(&source_path, &into);
     let state_path = state_path(&id, system);
     let state = load_state(&state_path)?;
     Ok(Bundle {
         id,
+        source_path,
         manifest_path,
         into,
         state_path,
         state,
+        system,
     })
 }
 
@@ -527,7 +550,7 @@ fn load_state(path: &Path) -> Result<Option<BundleState>> {
     );
     ensure!(
         path.file_stem().and_then(|stem| stem.to_str()) == Some(state.id.as_str())
-            && state.id == bundle_id(&state.manifest_path, &state.into),
+            && state.id == bundle_id(&state.source_path, &state.into),
         "tool-stub bundle identity does not match {}",
         display_path(path)
     );
@@ -544,27 +567,51 @@ fn save_state(path: &Path, state: &BundleState) -> Result<()> {
     file::write_atomic(path, contents)
 }
 
-fn load_desired(bundle: &Bundle) -> Result<(String, BTreeMap<String, DesiredCommand>)> {
-    let contents = file::read_to_string(&bundle.manifest_path).wrap_err_with(|| {
-        format!(
-            "failed to read tool-stub manifest {}",
-            display_path(&bundle.manifest_path)
-        )
-    })?;
-    let manifest: Manifest = toml::from_str(&contents).wrap_err_with(|| {
-        format!(
-            "failed to parse tool-stub manifest {}",
-            display_path(&bundle.manifest_path)
-        )
-    })?;
+async fn load_desired(bundle: &Bundle) -> Result<(String, BTreeMap<String, DesiredCommand>)> {
+    let (source_hash, commands) = if let Some(manifest_path) = &bundle.manifest_path {
+        let contents = file::read_to_string(manifest_path).wrap_err_with(|| {
+            format!(
+                "failed to read tool-stub manifest {}",
+                display_path(manifest_path)
+            )
+        })?;
+        let manifest: Manifest = toml::from_str(&contents).wrap_err_with(|| {
+            format!(
+                "failed to parse tool-stub manifest {}",
+                display_path(manifest_path)
+            )
+        })?;
+        let provenance = ConfigProvenance::from_path(manifest_path);
+        let commands = manifest
+            .commands
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    name,
+                    CommandSpec {
+                        value,
+                        provenance: provenance.clone(),
+                    },
+                )
+            })
+            .collect();
+        (crate::hash::hash_sha256_to_str(&contents), commands)
+    } else {
+        load_config_commands(bundle.system).await?
+    };
     ensure!(
-        !manifest.commands.is_empty(),
-        "tool-stub manifest has no commands"
+        !commands.is_empty(),
+        "tool-stub configuration has no commands"
     );
     let mut desired = BTreeMap::new();
-    for (name, value) in manifest.commands {
+    for (name, spec) in commands {
         validate_command_name(&name)?;
-        let rendered = render_command(&bundle.id, &name, value)?;
+        let rendered = render_command(&bundle.id, &name, spec.value).wrap_err_with(|| {
+            format!(
+                "invalid tool-stub command {name} in {}",
+                display_path(spec.provenance.path())
+            )
+        })?;
         let path = bundle.into.join(&name);
         desired.insert(
             name.clone(),
@@ -576,7 +623,38 @@ fn load_desired(bundle: &Bundle) -> Result<(String, BTreeMap<String, DesiredComm
             },
         );
     }
-    Ok((crate::hash::hash_sha256_to_str(&contents), desired))
+    Ok((source_hash, desired))
+}
+
+async fn load_config_commands(system: bool) -> Result<(String, IndexMap<String, CommandSpec>)> {
+    let scope = if system {
+        ConfigFileScope::System
+    } else {
+        ConfigFileScope::User
+    };
+    let config = crate::config::Config::get().await?;
+    let mut commands = IndexMap::new();
+    for config_file in config.config_files.values().rev() {
+        let provenance = config_file.provenance();
+        if provenance.scope() != scope {
+            continue;
+        }
+        for (name, value) in config_file.tool_stubs() {
+            commands.insert(
+                name,
+                CommandSpec {
+                    value,
+                    provenance: provenance.clone(),
+                },
+            );
+        }
+    }
+    let values = commands
+        .iter()
+        .map(|(name, spec)| (name.clone(), spec.value.clone()))
+        .collect::<IndexMap<_, _>>();
+    let contents = toml::to_string(&values)?;
+    Ok((crate::hash::hash_sha256_to_str(&contents), commands))
 }
 
 fn validate_command_name(name: &str) -> Result<()> {
@@ -802,14 +880,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("broken.json"), "not json").unwrap();
 
-        let manifest_path = tmp.path().join("stubs.toml");
+        let source_path = tmp.path().join("stubs.toml");
         let into = tmp.path().join("bin");
-        let id = bundle_id(&manifest_path, &into);
+        let id = bundle_id(&source_path, &into);
         let state = BundleState {
             schema_version: STATE_SCHEMA_VERSION,
             id: id.clone(),
-            manifest_path,
-            manifest_hash: "manifest".into(),
+            source_path,
+            source_hash: "source".into(),
             into,
             commands: BTreeMap::new(),
         };

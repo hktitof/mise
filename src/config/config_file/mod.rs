@@ -149,6 +149,10 @@ pub(crate) trait ConfigFile: Debug + Send + Sync {
         Ok(Default::default())
     }
 
+    fn tool_stubs(&self) -> IndexMap<String, ::toml::Value> {
+        Default::default()
+    }
+
     fn task_config(&self) -> &TaskConfig {
         static DEFAULT_TASK_CONFIG: Lazy<TaskConfig> = Lazy::new(TaskConfig::default);
         &DEFAULT_TASK_CONFIG

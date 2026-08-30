@@ -383,6 +383,8 @@ pub(crate) struct MiseToml {
     tool_alias: AliasMap,
     #[serde(default)]
     shell_alias: IndexMap<String, String>,
+    #[serde(default)]
+    tool_stubs: IndexMap<String, toml::Value>,
     #[serde(skip)]
     doc: Mutex<OnceCell<DocumentMut>>,
     #[serde(default)]
@@ -1597,6 +1599,10 @@ impl ConfigFile for MiseToml {
             .collect()
     }
 
+    fn tool_stubs(&self) -> IndexMap<String, toml::Value> {
+        self.tool_stubs.clone()
+    }
+
     fn task_config(&self) -> &TaskConfig {
         &self.task_config
     }
@@ -1873,6 +1879,7 @@ impl Clone for MiseToml {
             alias: self.alias.clone(),
             tool_alias: self.tool_alias.clone(),
             shell_alias: self.shell_alias.clone(),
+            tool_stubs: self.tool_stubs.clone(),
             doc: Mutex::new(self.doc.lock().unwrap().clone()),
             hooks: self.hooks.clone(),
             tools: Mutex::new(self.tools.lock().unwrap().clone()),
@@ -2946,6 +2953,22 @@ mod tests {
     use crate::{config::Config, dirs::CWD};
 
     use super::*;
+
+    #[test]
+    fn test_parse_tool_stubs() {
+        let config = toml::from_str::<MiseToml>(indoc! {r#"
+            [tool_stubs]
+            rg = "ripgrep@14"
+            node = { version = "22", bin = "node" }
+        "#})
+        .unwrap();
+
+        assert_eq!(
+            config.tool_stubs.get("rg"),
+            Some(&toml::Value::String("ripgrep@14".into()))
+        );
+        assert_eq!(config.tool_stubs["node"]["version"].as_str(), Some("22"));
+    }
 
     #[test]
     fn test_resolve_plugin_source_path() {

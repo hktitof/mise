@@ -5,13 +5,13 @@
 - **Effect:** modifies state
 - **Source code:** [`src/cli/tool_stubs.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_stubs.rs)
 
-Create or update the executable stubs declared by a manifest
+Create or update executable stubs declared in configuration
 
 ## Arguments
-- **`[MANIFEST]`** — Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+- **`[MANIFEST]`** — Custom manifest; omit to read [tool_stubs] from the selected config scope
 
 ## Flags
-- **`--into <DIR>`** — Directory in which to write commands [default: ~/.local/share/mise/tool-stubs/bin]
-- **`--system`** — Use the system catalogue and system tool-stub bin
+- **`--into <DIR>`** — Directory in which to write commands from a custom manifest
+- **`--system`** — Use [tool_stubs] from system config and the system tool-stub bin
 - **`-f --force`** — Replace modified or conflicting command files
 - **`-h --help`** — Print help

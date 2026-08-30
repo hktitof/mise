@@ -16,24 +16,27 @@ Tool stubs are particularly useful for adding less-commonly used tools to your m
 
 ## Managed Tool-Stub Bundles
 
-Use a bundle manifest when a user or operating-system setup needs to publish several commands lazily:
+Declare managed commands in the normal mise configuration when a user or
+operating-system setup needs to publish several commands lazily:
 
 ```toml
-[commands]
+[tool_stubs]
 rg = "ripgrep@14"
 node = { version = "22", bin = "node" }
 prettier = { tool = "npm:prettier", version = "3", bin = "prettier" }
 ```
 
-The default user catalogue is `~/.config/mise/tool-stubs.toml`. Its generated
+User tool stubs follow normal user-config layering, including
+`~/.config/mise/config.toml` and `~/.config/mise/conf.d/*.toml`. Their generated
 commands live in mise-owned data, not in the user-editable `~/.local/bin`:
 
 ```bash
 mise tool-stubs sync
 ```
 
-System administrators and operating-system distributions can publish a lower
-precedence catalogue at `/etc/mise/tool-stubs.toml`:
+System administrators and operating-system distributions can put lower
+precedence declarations in normal system config, such as
+`/etc/mise/config.toml` or `/etc/mise/conf.d/*.toml`:
 
 ```bash
 sudo mise tool-stubs sync --system
@@ -41,10 +44,14 @@ sudo mise tool-stubs sync --system
 
 The two generated bins follow mise's existing data scopes:
 
-| Scope  | Manifest                                  | Generated bin                          |
-| ------ | ----------------------------------------- | -------------------------------------- |
-| User   | `$MISE_CONFIG_DIR/tool-stubs.toml`        | `$MISE_DATA_DIR/tool-stubs/bin`        |
-| System | `$MISE_SYSTEM_CONFIG_DIR/tool-stubs.toml` | `$MISE_SYSTEM_DATA_DIR/tool-stubs/bin` |
+| Scope  | Configuration              | Generated bin                          |
+| ------ | -------------------------- | -------------------------------------- |
+| User   | Normal user config files   | `$MISE_DATA_DIR/tool-stubs/bin`        |
+| System | Normal system config files | `$MISE_SYSTEM_DATA_DIR/tool-stubs/bin` |
+
+Mise uses each config file's provenance to keep system and user declarations
+separate. Within a scope, the normal config precedence rules apply. Project
+config does not publish managed user or system stubs.
 
 `mise activate` places the user bin before the system bin. A same-named user
 stub therefore overrides a system stub without modifying it. Explicitly
@@ -52,10 +59,15 @@ configured project tools and mise shims remain more specific and take
 precedence over both catalogues.
 
 An explicit manifest and destination remain available for project or custom
-bundles:
+bundles. Custom manifests declare commands under `[commands]`:
 
 ```bash
 mise tool-stubs sync ./tool-stubs.toml --into ./bin
+```
+
+```toml
+[commands]
+rg = "ripgrep@14"
 ```
 
 Sync only writes executable stubs; it does not install any of the declared tools. Each tool remains lazy and is installed when its command is first invoked. Generated files carry an ownership marker and mise records their hashes. An existing unowned file, or a generated file edited since the last sync, is never overwritten unless `--force` is passed.

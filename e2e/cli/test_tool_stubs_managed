@@ -5,12 +5,12 @@
 export MISE_SYSTEM_CONFIG_DIR="$PWD/system-config"
 export MISE_SYSTEM_DATA_DIR="$PWD/system-data"
 mkdir -p "$MISE_CONFIG_DIR" "$MISE_SYSTEM_CONFIG_DIR"
-cat >"$MISE_SYSTEM_CONFIG_DIR/tool-stubs.toml" <<'EOF'
-[commands]
+cat >"$MISE_SYSTEM_CONFIG_DIR/config.toml" <<'EOF'
+[tool_stubs]
 dummy-scope = { tool = "dummy", version = "1", bin = "dummy" }
 EOF
-cat >"$MISE_CONFIG_DIR/tool-stubs.toml" <<'EOF'
-[commands]
+cat >"$MISE_CONFIG_DIR/config.toml" <<'EOF'
+[tool_stubs]
 dummy-scope = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
 

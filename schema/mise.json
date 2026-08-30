@@ -3605,6 +3605,22 @@
         "type": "string"
       }
     },
+    "tool_stubs": {
+      "description": "managed command stubs published from system or user configuration",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "description": "tool and version request",
+            "type": "string"
+          },
+          {
+            "description": "tool-stub configuration",
+            "type": "object"
+          }
+        ]
+      }
+    },
     "env": {
       "description": "environment variables to set",
       "oneOf": [

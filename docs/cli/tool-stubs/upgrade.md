@@ -8,7 +8,7 @@
 Upgrade versions selected by managed tool stubs
 
 ## Arguments
-- **`[MANIFEST]`** — Manifest whose managed stubs should be upgraded; omit to use all tracked stubs
+- **`[MANIFEST]`** — Custom manifest whose managed stubs should be upgraded; omit for tracked stubs
 
 ## Flags
 - **`--into <DIR>`** — Directory containing the commands (normally discovered from prior sync state)

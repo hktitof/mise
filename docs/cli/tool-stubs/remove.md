@@ -8,10 +8,10 @@
 Remove command files owned by a synchronized bundle
 
 ## Arguments
-- **`[MANIFEST]`** — Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+- **`[MANIFEST]`** — Custom manifest; omit to use the synchronized selected config scope
 
 ## Flags
 - **`--into <DIR>`** — Directory containing the commands (normally discovered from prior sync state)
-- **`--system`** — Use the system catalogue and system tool-stub bin
+- **`--system`** — Use the synchronized system config catalogue and system tool-stub bin
 - **`-f --force`** — Remove owned command files even when their contents were modified
 - **`-h --help`** — Print help

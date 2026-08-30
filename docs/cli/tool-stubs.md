@@ -5,15 +5,15 @@
 - **Effect:** read-only
 - **Source code:** [`src/cli/tool_stubs.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_stubs.rs)
 
-Manage executable tool-stub bundles from a TOML manifest
+Manage executable tool stubs declared in mise configuration
 
-A manifest declares commands under `[commands]`. String values use
-`tool@version` syntax; tables accept the same fields as `mise tool-stub`.
-Syncing writes executable stubs without installing their tools. The first
-invocation of each stub installs its declared version lazily.
+Normal system and user configs declare commands under `[tool_stubs]`.
+String values use `tool@version` syntax; tables accept the same fields as
+`mise tool-stub`. Syncing writes executable stubs without installing their
+tools. The first invocation installs its declared version lazily.
 
 ```toml
-[commands]
+[tool_stubs]
 rg = "ripgrep@14"
 node = { version = "22", bin = "node" }
 ```

@@ -5,14 +5,14 @@
 - **Effect:** read-only
 - **Source code:** [`src/cli/tool_stubs.rs`](https://github.com/jdx/mise/blob/main/src/cli/tool_stubs.rs)
 
-Show whether generated stubs match their manifest and ownership state
+Show whether generated stubs match their source configuration and ownership state
 
 ## Arguments
-- **`[MANIFEST]`** — Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
+- **`[MANIFEST]`** — Custom manifest; omit to read [tool_stubs] from the selected config scope
 
 ## Flags
 - **`--into <DIR>`** — Directory containing the commands (normally discovered from prior sync state)
-- **`--system`** — Use the system catalogue and system tool-stub bin
+- **`--system`** — Use [tool_stubs] from system config and the system tool-stub bin
 - **`--missing`** — Print only command names that need to be synchronized
 - **`--json`** — Print structured status as JSON
 - **`-h --help`** — Print help

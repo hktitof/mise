@@ -4048,42 +4048,42 @@ Arguments to pass to the tool
 All arguments after the stub file path will be forwarded to the underlying tool. Use '--' to separate mise arguments from tool arguments if needed.
 """# required=#false double_dash=automatic var=#true
 }
-cmd tool-stubs subcommand_required=#true help="Manage executable tool-stub bundles from a TOML manifest" effect=read {
+cmd tool-stubs subcommand_required=#true help="Manage executable tool stubs declared in mise configuration" effect=read {
     long_help #"""
-Manage executable tool-stub bundles from a TOML manifest
+Manage executable tool stubs declared in mise configuration
 
-A manifest declares commands under `[commands]`. String values use
-`tool@version` syntax; tables accept the same fields as `mise tool-stub`.
-Syncing writes executable stubs without installing their tools. The first
-invocation of each stub installs its declared version lazily.
+Normal system and user configs declare commands under `[tool_stubs]`.
+String values use `tool@version` syntax; tables accept the same fields as
+`mise tool-stub`. Syncing writes executable stubs without installing their
+tools. The first invocation installs its declared version lazily.
 
 ```toml
-[commands]
+[tool_stubs]
 rg = "ripgrep@14"
 node = { version = "22", bin = "node" }
 ```
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
-    cmd sync help="Create or update the executable stubs declared by a manifest" effect=write {
-        flag --into help="Directory in which to write commands [default: ~/.local/share/mise/tool-stubs/bin]" {
+    cmd sync help="Create or update executable stubs declared in configuration" effect=write {
+        flag --into help="Directory in which to write commands from a custom manifest" {
             arg <DIR>
         }
-        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
+        flag --system help="Use [tool_stubs] from system config and the system tool-stub bin" conflicts=--into
         flag "-f --force" help="Replace modified or conflicting command files"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
+        arg "[MANIFEST]" help="Custom manifest; omit to read [tool_stubs] from the selected config scope" required=#false
         complete manifest type=path
         complete dir type=dir
     }
-    cmd status help="Show whether generated stubs match their manifest and ownership state" effect=read {
+    cmd status help="Show whether generated stubs match their source configuration and ownership state" effect=read {
         flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
             arg <DIR>
         }
-        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
+        flag --system help="Use [tool_stubs] from system config and the system tool-stub bin" conflicts=--into
         flag --missing help="Print only command names that need to be synchronized"
         flag --json help="Print structured status as JSON"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
+        arg "[MANIFEST]" help="Custom manifest; omit to read [tool_stubs] from the selected config scope" required=#false
         complete manifest type=path
         complete dir type=dir
     }
@@ -4100,7 +4100,7 @@ node = { version = "22", bin = "node" }
         flag --prune help="Immediately remove versions replaced by this upgrade" overrides=--no-prune
         flag --raw help="Connect install command input and output directly to the terminal" overrides=--jobs
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg "[MANIFEST]" help="Manifest whose managed stubs should be upgraded; omit to use all tracked stubs" required=#false
+        arg "[MANIFEST]" help="Custom manifest whose managed stubs should be upgraded; omit for tracked stubs" required=#false
         complete manifest type=path
         complete dir type=dir
     }
@@ -4108,10 +4108,10 @@ node = { version = "22", bin = "node" }
         flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
             arg <DIR>
         }
-        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
+        flag --system help="Use the synchronized system config catalogue and system tool-stub bin" conflicts=--into
         flag "-f --force" help="Remove owned command files even when their contents were modified"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
+        arg "[MANIFEST]" help="Custom manifest; omit to use the synchronized selected config scope" required=#false
         complete manifest type=path
         complete dir type=dir
     }
