@@ -70,7 +70,7 @@ mise tool-stubs sync ./tool-stubs.toml --into ./bin
 rg = "ripgrep@14"
 ```
 
-Sync only writes executable stubs; it does not install any of the declared tools. Each tool remains lazy and is installed when its command is first invoked. Generated files carry an ownership marker and mise records their hashes. An existing unowned file, or a generated file edited since the last sync, is never overwritten unless `--force` is passed.
+Sync only writes executable stubs; it does not install any of the declared tools. Each tool remains lazy and is installed when its command is first invoked. Generated files carry an ownership marker and mise records their hashes. An existing unowned file, or a generated file edited since the last sync, is never overwritten unless `--force` is passed. Catalogue changes are staged together; if a file, tracking, or state update fails, mise restores the previous catalogue.
 
 Use `status` to audit a bundle, `upgrade` to update already-installed versions selected by its stubs, and `remove` to delete the owned command files without uninstalling their tools:
 

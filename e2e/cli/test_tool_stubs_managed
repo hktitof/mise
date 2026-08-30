@@ -102,6 +102,35 @@ EOF
 mise tool-stubs sync stubs.toml
 assert_fail "test -e bin/collision"
 
+# A failure after reconciliation starts restores the complete old catalogue.
+cat >stubs.toml <<'EOF'
+[commands]
+aa-rollback-old = { tool = "dummy", version = "2", bin = "dummy" }
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+mise tool-stubs sync stubs.toml
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+zz-rollback-blocked = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+mkdir bin/zz-rollback-blocked
+assert_fail "mise tool-stubs sync stubs.toml --force"
+assert "test -x bin/aa-rollback-old"
+rmdir bin/zz-rollback-blocked
+cat >stubs.toml <<'EOF'
+[commands]
+aa-rollback-old = { tool = "dummy", version = "2", bin = "dummy" }
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+assert_contains "mise tool-stubs status stubs.toml" "current   aa-rollback-old"
+cat >stubs.toml <<'EOF'
+[commands]
+dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+mise tool-stubs sync stubs.toml
+assert_fail "test -e bin/aa-rollback-old"
+
 # --missing is concise enough for provisioning scripts.
 rm bin/dummy-one
 assert "mise tool-stubs status stubs.toml --missing" "dummy-one"

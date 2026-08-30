@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use eyre::{Context, Result, bail, ensure, eyre};
@@ -197,6 +199,17 @@ struct Bundle {
     system: bool,
 }
 
+struct SyncFileTransaction {
+    backup: tempfile::TempDir,
+    backed_up: Vec<(PathBuf, PathBuf)>,
+    installed: Vec<PathBuf>,
+}
+
+enum StateRollback {
+    Replace(file::PreparedAtomicWrite),
+    Remove(PathBuf),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum StatusKind {
@@ -233,6 +246,11 @@ impl Sync {
         let _into_lock = crate::lock_file::get(&bundle.into, false)?;
         let _lock = crate::lock_file::get(&bundle.state_path, false)?;
         bundle.state = load_state(&bundle.state_path)?;
+        if let Some(state) = &bundle.state {
+            for (name, command) in &state.commands {
+                validate_managed_path(state, name, &command.path)?;
+            }
+        }
         let (source_hash, desired) = load_desired(&bundle).await?;
         let statuses = collect_status(&bundle, &desired)?;
         let blockers = statuses
@@ -255,15 +273,22 @@ impl Sync {
         }
 
         file::create_dir_all(&bundle.into)?;
-        let mut managed_commands = bundle
-            .state
-            .as_ref()
-            .map(|state| state.commands.clone())
-            .unwrap_or_default();
-
-        // Checkpoint after each command so an interrupted sync can resume
-        // without treating mise's own completed writes as foreign output.
-        // Remove commands deleted from the manifest before writing the new set.
+        let status_by_name = statuses
+            .iter()
+            .map(|status| (status.command.as_str(), status.status))
+            .collect::<BTreeMap<_, _>>();
+        let staging = tempfile::Builder::new()
+            .prefix(".mise-tool-stubs-stage-")
+            .tempdir_in(&bundle.into)?;
+        let mut changes = BTreeMap::new();
+        for (name, command) in &desired {
+            if status_by_name.get(name.as_str()) != Some(&StatusKind::Current) {
+                let staged_path = staging.path().join(name);
+                file::write_atomic(&staged_path, &command.contents)?;
+                file::make_executable(&staged_path)?;
+                changes.insert(name.clone(), (command.path.clone(), Some(staged_path)));
+            }
+        }
         if let Some(state) = &bundle.state {
             for (name, managed) in &state.commands {
                 if desired.contains_key(name) {
@@ -279,58 +304,229 @@ impl Sync {
                         "refusing to remove modified tool stub {}; use --force",
                         display_path(&managed.path)
                     );
-                    file::remove_file(&managed.path)?;
                 }
-                Tracker::untrack_stub(&managed.path)?;
-                managed_commands.remove(name);
-                save_progress(&bundle, &source_hash, &managed_commands)?;
+                changes.insert(name.clone(), (managed.path.clone(), None));
             }
         }
 
-        let status_by_name = statuses
+        let managed_commands = desired
             .iter()
-            .map(|status| (status.command.as_str(), status.status))
+            .map(|(name, command)| {
+                (
+                    name.clone(),
+                    ManagedCommand {
+                        path: command.path.clone(),
+                        content_hash: command.content_hash.clone(),
+                    },
+                )
+            })
             .collect::<BTreeMap<_, _>>();
-        for (name, command) in &desired {
-            if status_by_name.get(name.as_str()) != Some(&StatusKind::Current) {
-                if command.path.is_symlink() {
-                    std::fs::remove_file(&command.path)?;
-                }
-                file::write_atomic(&command.path, &command.contents)?;
-                file::make_executable(&command.path)?;
-                info!("wrote {}", display_path(&command.path));
-            }
-            Tracker::track_stub(&command.path)?;
-            managed_commands.insert(
-                name.clone(),
-                ManagedCommand {
-                    path: command.path.clone(),
-                    content_hash: command.content_hash.clone(),
-                },
-            );
-            save_progress(&bundle, &source_hash, &managed_commands)?;
-        }
-
-        save_progress(&bundle, &source_hash, &managed_commands)
-    }
-}
-
-fn save_progress(
-    bundle: &Bundle,
-    source_hash: &str,
-    commands: &BTreeMap<String, ManagedCommand>,
-) -> Result<()> {
-    save_state(
-        &bundle.state_path,
-        &BundleState {
+        let final_state = BundleState {
             schema_version: STATE_SCHEMA_VERSION,
             id: bundle.id.clone(),
             source_path: bundle.source_path.clone(),
-            source_hash: source_hash.to_string(),
+            source_hash,
             into: bundle.into.clone(),
-            commands: commands.clone(),
-        },
-    )
+            commands: managed_commands,
+        };
+        let state_parent = bundle
+            .state_path
+            .parent()
+            .expect("tool-stub bundle state has a parent directory");
+        file::create_dir_all(state_parent)?;
+        let state_rollback = prepare_state_rollback(&bundle.state_path)?;
+        let prepared_state = prepare_state_write(&bundle.state_path, &final_state)?;
+
+        let affected_paths = bundle
+            .state
+            .iter()
+            .flat_map(|state| state.commands.values())
+            .map(|command| command.path.clone())
+            .chain(desired.values().map(|command| command.path.clone()))
+            .collect::<BTreeSet<_>>();
+        let tracking_snapshot = affected_paths
+            .iter()
+            .map(|path| Ok((path.clone(), Tracker::is_stub_tracked(path)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut transaction = SyncFileTransaction::new(&bundle.into)?;
+        let commit_result = (|| -> Result<()> {
+            for (name, (path, _)) in &changes {
+                transaction.back_up(name, path)?;
+            }
+            for (name, (path, staged_path)) in &changes {
+                if let Some(staged_path) = staged_path {
+                    transaction.install(staged_path, path)?;
+                    debug_assert_eq!(path, &bundle.into.join(name));
+                }
+            }
+            file::sync_dir(&bundle.into)?;
+
+            for command in desired.values() {
+                Tracker::track_stub(&command.path)?;
+            }
+            if let Some(state) = &bundle.state {
+                for (name, managed) in &state.commands {
+                    if !desired.contains_key(name) {
+                        Tracker::untrack_stub(&managed.path)?;
+                    }
+                }
+            }
+            prepared_state.commit()
+        })();
+
+        if let Err(err) = commit_result {
+            let mut rollback_errors = Vec::new();
+            if let Err(rollback_err) = state_rollback.restore() {
+                rollback_errors.push(format!("bundle state: {rollback_err:#}"));
+            }
+            if let Err(rollback_err) = transaction.rollback() {
+                rollback_errors.push(format!("command files: {rollback_err:#}"));
+            }
+            if let Err(rollback_err) = restore_tracking(&tracking_snapshot) {
+                rollback_errors.push(format!("tracked stubs: {rollback_err:#}"));
+            }
+            if rollback_errors.is_empty() {
+                return Err(err);
+            }
+            return Err(err.wrap_err(format!(
+                "failed to roll back tool-stub sync: {}",
+                rollback_errors.join("; ")
+            )));
+        }
+
+        for (_, (path, staged_path)) in changes {
+            if staged_path.is_some() {
+                info!("wrote {}", display_path(path));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl SyncFileTransaction {
+    fn new(into: &Path) -> Result<Self> {
+        Ok(Self {
+            backup: tempfile::Builder::new()
+                .prefix(".mise-tool-stubs-backup-")
+                .tempdir_in(into)?,
+            backed_up: Vec::new(),
+            installed: Vec::new(),
+        })
+    }
+
+    fn back_up(&mut self, name: &str, path: &Path) -> Result<()> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+        ensure!(
+            !metadata.file_type().is_dir(),
+            "refusing to replace directory {}; remove it first",
+            display_path(path)
+        );
+        let backup_path = self.backup.path().join(name);
+        fs::rename(path, &backup_path)
+            .wrap_err_with(|| format!("failed to back up tool stub {}", display_path(path)))?;
+        self.backed_up.push((path.to_path_buf(), backup_path));
+        Ok(())
+    }
+
+    fn install(&mut self, staged_path: &Path, path: &Path) -> Result<()> {
+        fs::rename(staged_path, path)
+            .wrap_err_with(|| format!("failed to install tool stub {}", display_path(path)))?;
+        self.installed.push(path.to_path_buf());
+        Ok(())
+    }
+
+    fn rollback(self) -> Result<()> {
+        let Self {
+            backup,
+            backed_up,
+            installed,
+        } = self;
+        let mut errors = Vec::new();
+        for path in installed.into_iter().rev() {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => errors.push(format!("{}: {err}", display_path(path))),
+            }
+        }
+        for (path, backup_path) in backed_up.into_iter().rev() {
+            if let Err(err) = fs::rename(&backup_path, &path) {
+                errors.push(format!("{}: {err}", display_path(path)));
+            }
+        }
+        if let Err(err) = file::sync_dir(
+            backup
+                .path()
+                .parent()
+                .expect("tool-stub backup has a parent directory"),
+        ) {
+            errors.push(format!("directory sync: {err:#}"));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            let backup = backup.keep();
+            bail!(
+                "{}; original files preserved at {}",
+                errors.join("; "),
+                display_path(backup)
+            )
+        }
+    }
+}
+
+impl StateRollback {
+    fn restore(self) -> Result<()> {
+        match self {
+            Self::Replace(replacement) => replacement.commit(),
+            Self::Remove(path) => match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err.into()),
+            },
+        }
+    }
+}
+
+fn prepare_state_rollback(path: &Path) -> Result<StateRollback> {
+    match fs::read(path) {
+        Ok(contents) => Ok(StateRollback::Replace(file::prepare_atomic_write(
+            path, contents,
+        )?)),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            Ok(StateRollback::Remove(path.to_path_buf()))
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn prepare_state_write(path: &Path, state: &BundleState) -> Result<file::PreparedAtomicWrite> {
+    let mut contents = serde_json::to_vec_pretty(state)?;
+    contents.push(b'\n');
+    file::prepare_atomic_write(path, contents)
+}
+
+fn restore_tracking(snapshot: &BTreeMap<PathBuf, bool>) -> Result<()> {
+    let mut errors = Vec::new();
+    for (path, tracked) in snapshot {
+        let result = if *tracked {
+            Tracker::track_stub(path)
+        } else {
+            Tracker::untrack_stub(path)
+        };
+        if let Err(err) = result {
+            errors.push(format!("{}: {err:#}", display_path(path)));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!("{}", errors.join("; "))
+    }
 }
 
 impl Status {
@@ -575,14 +771,13 @@ fn load_state(path: &Path) -> Result<Option<BundleState>> {
     Ok(Some(state))
 }
 
+#[cfg(test)]
 fn save_state(path: &Path, state: &BundleState) -> Result<()> {
     file::create_dir_all(
         path.parent()
             .expect("tool-stub bundle state has a parent directory"),
     )?;
-    let mut contents = serde_json::to_vec_pretty(state)?;
-    contents.push(b'\n');
-    file::write_atomic(path, contents)
+    prepare_state_write(path, state)?.commit()
 }
 
 async fn load_desired(bundle: &Bundle) -> Result<(String, BTreeMap<String, DesiredCommand>)> {

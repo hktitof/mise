@@ -28,6 +28,15 @@ impl Tracker {
         }
     }
 
+    pub(crate) fn is_stub_tracked(path: &Path) -> Result<bool> {
+        let tracking_path = TRACKED_STUBS.join(hash_to_str(&path));
+        match fs::symlink_metadata(tracking_path) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     fn track_in(dir: &Path, path: &Path) -> Result<()> {
         let tracking_path = dir.join(hash_to_str(&path));
         if !tracking_path.exists() {
