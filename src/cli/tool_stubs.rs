@@ -617,10 +617,6 @@ async fn load_desired(bundle: &Bundle) -> Result<(String, BTreeMap<String, Desir
     } else {
         load_config_commands(bundle.system).await?
     };
-    ensure!(
-        !commands.is_empty(),
-        "tool-stub configuration has no commands"
-    );
     let mut desired = BTreeMap::new();
     for (name, spec) in commands {
         validate_command_name(&name)?;

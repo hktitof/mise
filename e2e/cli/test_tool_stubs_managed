@@ -14,6 +14,13 @@ cat >"$MISE_CONFIG_DIR/config.toml" <<'EOF'
 dummy-scope = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
 
+# Activation publishes both managed bins before they exist so a later sync is
+# immediately visible in the already-activated shell.
+assert_fail "test -d '$MISE_SYSTEM_DATA_DIR/tool-stubs/bin'"
+assert_fail "test -d '$MISE_DATA_DIR/tool-stubs/bin'"
+assert_contains "mise activate bash --no-hook-env" "$MISE_SYSTEM_DATA_DIR/tool-stubs/bin"
+assert_contains "mise activate bash --no-hook-env" "$MISE_DATA_DIR/tool-stubs/bin"
+eval "$(mise activate bash --no-hook-env)"
 mise tool-stubs sync --system
 mise tool-stubs sync
 assert "test -x '$MISE_SYSTEM_DATA_DIR/tool-stubs/bin/dummy-scope'"
@@ -22,8 +29,14 @@ assert_contains "mise tool-stubs status --system" "current"
 assert_contains "mise tool-stubs status" "current"
 assert_contains "PATH='$MISE_DATA_DIR/tool-stubs/bin:$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 2.0.0"
 assert_contains "PATH='$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 1.1.0"
-assert_contains "mise activate bash --no-hook-env" "$MISE_SYSTEM_DATA_DIR/tool-stubs/bin"
-assert_contains "mise activate bash --no-hook-env" "$MISE_DATA_DIR/tool-stubs/bin"
+assert_contains "dummy-scope" "This is Dummy 2.0.0"
+
+# Clearing the last declaration reconciles away previously managed stubs.
+printf '[settings]\n' >"$MISE_CONFIG_DIR/config.toml"
+mise tool-stubs sync
+assert_fail "test -e '$MISE_DATA_DIR/tool-stubs/bin/dummy-scope'"
+assert "mise tool-stubs status --missing" ""
+
 mkdir -p "$MISE_DATA_DIR/shims"
 cat >check-shim-precedence.sh <<'EOF'
 eval "$(mise activate bash --shims)"

@@ -193,8 +193,8 @@ impl Activate {
     ) -> bool {
         let system = &*dirs::SYSTEM_TOOL_STUBS;
         let user = &*dirs::TOOL_STUBS;
-        let system_valid = system.is_dir() && is_dir_not_in_nix(system) && !system.is_relative();
-        let user_valid = user.is_dir() && is_dir_not_in_nix(user) && !user.is_relative();
+        let system_valid = is_dir_not_in_nix(system) && !system.is_relative();
+        let user_valid = is_dir_not_in_nix(user) && !user.is_relative();
 
         if shell.supports_move_path() {
             for path in [(system_valid, system), (user_valid, user)] {
