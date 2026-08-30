@@ -53,13 +53,17 @@ impl ToolStubs {
 /// Create or update the executable stubs declared by a manifest
 #[derive(Debug, usage_rs::Args)]
 struct Sync {
-    /// Path to the tool-stub bundle manifest
+    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
 
-    /// Directory in which to write commands [default: ~/.local/bin]
+    /// Directory in which to write commands [default: ~/.local/share/mise/tool-stubs/bin]
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
+
+    /// Use the system catalogue and system tool-stub bin
+    #[usage(long, conflicts = "into")]
+    system: bool,
 
     /// Replace modified or conflicting command files
     #[usage(long, short)]
@@ -69,13 +73,17 @@ struct Sync {
 /// Show whether generated stubs match their manifest and ownership state
 #[derive(Debug, usage_rs::Args)]
 struct Status {
-    /// Path to the tool-stub bundle manifest
+    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
 
     /// Directory containing the commands (normally discovered from prior sync state)
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
+
+    /// Use the system catalogue and system tool-stub bin
+    #[usage(long, conflicts = "into")]
+    system: bool,
 
     /// Print only command names that need to be synchronized
     #[usage(long)]
@@ -96,6 +104,10 @@ struct Upgrade {
     /// Directory containing the commands (normally discovered from prior sync state)
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
+
+    /// Upgrade installed tools selected by system tool stubs
+    #[usage(long, conflicts = "into")]
+    system: bool,
 
     /// Number of parallel install jobs
     #[usage(long, short, env = "MISE_JOBS")]
@@ -121,13 +133,17 @@ struct Upgrade {
 /// Remove command files owned by a synchronized bundle
 #[derive(Debug, usage_rs::Args)]
 struct Remove {
-    /// Path to the tool-stub bundle manifest
+    /// Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
-    manifest: PathBuf,
+    manifest: Option<PathBuf>,
 
     /// Directory containing the commands (normally discovered from prior sync state)
     #[usage(long, value_name = "DIR", value_hint = usage_rs::ValueHint::DirPath)]
     into: Option<PathBuf>,
+
+    /// Use the system catalogue and system tool-stub bin
+    #[usage(long, conflicts = "into")]
+    system: bool,
 
     /// Remove owned command files even when their contents were modified
     #[usage(long, short)]
@@ -203,7 +219,8 @@ struct CommandStatus {
 
 impl Sync {
     fn run(self) -> Result<()> {
-        let mut bundle = resolve_bundle(&self.manifest, self.into.as_deref())?;
+        let mut bundle =
+            resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
         let _into_lock = crate::lock_file::get(&bundle.into, false)?;
         let _lock = crate::lock_file::get(&bundle.state_path, false)?;
         bundle.state = load_state(&bundle.state_path)?;
@@ -291,7 +308,7 @@ impl Sync {
 
 impl Status {
     fn run(self) -> Result<()> {
-        let bundle = resolve_bundle(&self.manifest, self.into.as_deref())?;
+        let bundle = resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
         let (_, desired) = load_desired(&bundle)?;
         let mut statuses = collect_status(&bundle, &desired)?;
         if self.missing {
@@ -320,7 +337,7 @@ impl Status {
 impl Upgrade {
     async fn run(self) -> Result<()> {
         let paths = if let Some(manifest) = self.manifest {
-            let bundle = resolve_bundle(&manifest, self.into.as_deref())?;
+            let bundle = resolve_bundle(Some(&manifest), self.into.as_deref(), self.system)?;
             let state = bundle.state.ok_or_else(|| {
                 eyre!(
                     "tool-stub bundle has not been synchronized: {}",
@@ -337,7 +354,11 @@ impl Upgrade {
                 .collect()
         } else {
             ensure!(self.into.is_none(), "--into requires a manifest argument");
-            Tracker::list_all_stubs()?
+            if self.system {
+                stub_paths_from_states(list_states(true)?)?
+            } else {
+                tracked_stub_paths()?
+            }
         };
         crate::cli::upgrade::upgrade_tool_stub_paths(
             paths,
@@ -354,7 +375,8 @@ impl Upgrade {
 
 impl Remove {
     fn run(self) -> Result<()> {
-        let mut bundle = resolve_bundle(&self.manifest, self.into.as_deref())?;
+        let mut bundle =
+            resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
         let _into_lock = crate::lock_file::get(&bundle.into, false)?;
         let _lock = crate::lock_file::get(&bundle.state_path, false)?;
         bundle.state = load_state(&bundle.state_path)?;
@@ -394,8 +416,20 @@ impl Remove {
     }
 }
 
-fn default_into() -> PathBuf {
-    crate::dirs::HOME.join(".local").join("bin")
+fn default_manifest(system: bool) -> PathBuf {
+    if system {
+        crate::dirs::SYSTEM_CONFIG.join("tool-stubs.toml")
+    } else {
+        crate::dirs::CONFIG.join("tool-stubs.toml")
+    }
+}
+
+fn default_into(system: bool) -> PathBuf {
+    if system {
+        crate::dirs::SYSTEM_TOOL_STUBS.clone()
+    } else {
+        crate::dirs::TOOL_STUBS.clone()
+    }
 }
 
 fn absolute(path: &Path) -> Result<PathBuf> {
@@ -410,21 +444,29 @@ fn bundle_id(manifest_path: &Path, into: &Path) -> String {
     ))
 }
 
-fn state_path(id: &str) -> PathBuf {
-    crate::dirs::TOOL_STUB_BUNDLES.join(format!("{id}.json"))
+fn state_dir(system: bool) -> &'static Path {
+    if system {
+        &crate::dirs::SYSTEM_TOOL_STUB_BUNDLES
+    } else {
+        &crate::dirs::TOOL_STUB_BUNDLES
+    }
 }
 
-fn resolve_bundle(manifest: &Path, into: Option<&Path>) -> Result<Bundle> {
-    let manifest_path = absolute(manifest)?;
+fn state_path(id: &str, system: bool) -> PathBuf {
+    state_dir(system).join(format!("{id}.json"))
+}
+
+fn resolve_bundle(manifest: Option<&Path>, into: Option<&Path>, system: bool) -> Result<Bundle> {
+    let manifest_path = absolute(manifest.unwrap_or(&default_manifest(system)))?;
     let into = match into {
         Some(into) => absolute(into)?,
         None => {
-            let matches = list_states()?
+            let matches = list_states(system)?
                 .into_iter()
                 .filter(|state| state.manifest_path == manifest_path)
                 .collect::<Vec<_>>();
             match matches.as_slice() {
-                [] => absolute(&default_into())?,
+                [] => absolute(&default_into(system))?,
                 [state] => state.into.clone(),
                 _ => bail!(
                     "multiple tool-stub bundles use {}; specify --into",
@@ -434,7 +476,7 @@ fn resolve_bundle(manifest: &Path, into: Option<&Path>) -> Result<Bundle> {
         }
     };
     let id = bundle_id(&manifest_path, &into);
-    let state_path = state_path(&id);
+    let state_path = state_path(&id, system);
     let state = load_state(&state_path)?;
     Ok(Bundle {
         id,
@@ -445,8 +487,8 @@ fn resolve_bundle(manifest: &Path, into: Option<&Path>) -> Result<Bundle> {
     })
 }
 
-fn list_states() -> Result<Vec<BundleState>> {
-    list_states_in(&crate::dirs::TOOL_STUB_BUNDLES)
+fn list_states(system: bool) -> Result<Vec<BundleState>> {
+    list_states_in(state_dir(system))
 }
 
 fn list_states_in(dir: &Path) -> Result<Vec<BundleState>> {
@@ -673,7 +715,22 @@ fn file_hash(path: &Path) -> Result<String> {
 }
 
 pub(crate) fn tracked_stub_paths() -> Result<Vec<PathBuf>> {
-    Tracker::list_all_stubs()
+    let mut paths = Tracker::list_all_stubs()?;
+    paths.extend(stub_paths_from_states(list_states(true)?)?);
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn stub_paths_from_states(states: Vec<BundleState>) -> Result<Vec<PathBuf>> {
+    let mut paths = vec![];
+    for state in states {
+        for (name, command) in &state.commands {
+            validate_managed_path(&state, name, &command.path)?;
+            paths.push(command.path.clone());
+        }
+    }
+    Ok(paths)
 }
 
 #[cfg(test)]

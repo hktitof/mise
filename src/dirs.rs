@@ -16,10 +16,15 @@ pub(crate) static PLUGINS: Lazy<&Path> = Lazy::new(|| &env::MISE_PLUGINS_DIR);
 pub(crate) static DOWNLOADS: Lazy<&Path> = Lazy::new(|| &env::MISE_DOWNLOADS_DIR);
 pub(crate) static INSTALLS: Lazy<&Path> = Lazy::new(|| &env::MISE_INSTALLS_DIR);
 pub(crate) static SHIMS: Lazy<&Path> = Lazy::new(|| &env::MISE_SHIMS_DIR);
+pub(crate) static TOOL_STUBS: Lazy<PathBuf> = Lazy::new(|| DATA.join("tool-stubs/bin"));
+pub(crate) static SYSTEM_TOOL_STUBS: Lazy<PathBuf> =
+    Lazy::new(|| env::MISE_SYSTEM_DATA_DIR.join("tool-stubs/bin"));
 
 pub(crate) static TRACKED_CONFIGS: Lazy<PathBuf> = Lazy::new(|| STATE.join("tracked-configs"));
 pub(crate) static TRACKED_STUBS: Lazy<PathBuf> = Lazy::new(|| STATE.join("tracked-stubs"));
 pub(crate) static TOOL_STUB_BUNDLES: Lazy<PathBuf> = Lazy::new(|| STATE.join("tool-stub-bundles"));
+pub(crate) static SYSTEM_TOOL_STUB_BUNDLES: Lazy<PathBuf> =
+    Lazy::new(|| env::MISE_SYSTEM_DATA_DIR.join("tool-stub-bundles"));
 pub(crate) static TOOL_PURGATORY: Lazy<PathBuf> = Lazy::new(|| STATE.join("tool-purgatory.json"));
 pub(crate) static TRUSTED_CONFIGS: Lazy<PathBuf> = Lazy::new(|| STATE.join("trusted-configs"));
 pub(crate) static IGNORED_CONFIGS: Lazy<PathBuf> = Lazy::new(|| STATE.join("ignored-configs"));

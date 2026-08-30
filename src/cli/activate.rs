@@ -119,6 +119,7 @@ impl Activate {
         } else {
             false
         };
+        self.prepend_tool_stub_paths(shell, &mut prelude);
         if let Some(p) = self.shims_prepend_path(shell, &dirs::SHIMS, prepended_exe_dir) {
             prelude.push(p);
         }
@@ -143,6 +144,7 @@ impl Activate {
         if let Some(prepend_path) = self.prepend_path(exe_dir) {
             prelude.push(prepend_path);
         }
+        self.prepend_tool_stub_paths(shell, &mut prelude);
 
         // Generate encryption key for env cache if caching is enabled
         // This key is session-scoped and lost when the shell closes
@@ -174,6 +176,43 @@ impl Activate {
             ))
         } else {
             None
+        }
+    }
+
+    /// System stubs are prepended first so the later user prepend wins. Both
+    /// remain behind configured tool paths (or shims), which are the more
+    /// specific selection when a command exists in both places.
+    fn prepend_tool_stub_paths(&self, shell: &dyn Shell, prelude: &mut Vec<ActivatePrelude>) {
+        let system = &*dirs::SYSTEM_TOOL_STUBS;
+        let user = &*dirs::TOOL_STUBS;
+        let system_valid = system.is_dir() && is_dir_not_in_nix(system) && !system.is_relative();
+        let user_valid = user.is_dir() && is_dir_not_in_nix(user) && !user.is_relative();
+
+        if shell.supports_move_path() {
+            for path in [(system_valid, system), (user_valid, user)] {
+                if path.0 {
+                    prelude.push(ActivatePrelude::MovePrepend(
+                        PATH_KEY.to_string(),
+                        path.1.to_string_lossy().to_string(),
+                    ));
+                }
+            }
+            return;
+        }
+
+        let system_prepended = system_valid && !is_dir_in_path(system);
+        if system_prepended {
+            prelude.push(ActivatePrelude::Prepend(
+                PATH_KEY.to_string(),
+                system.to_string_lossy().to_string(),
+            ));
+        }
+        if user_valid && should_prepend_user_tool_stubs(&env::PATH, user, system, system_prepended)
+        {
+            prelude.push(ActivatePrelude::Prepend(
+                PATH_KEY.to_string(),
+                user.to_string_lossy().to_string(),
+            ));
         }
     }
 
@@ -274,6 +313,26 @@ fn should_prepend_shims(paths: &[PathBuf], dir: &Path, path_changed_before: bool
     path_changed_before || !is_dir_first_in_paths(paths, dir)
 }
 
+fn should_prepend_user_tool_stubs(
+    paths: &[PathBuf],
+    user: &Path,
+    system: &Path,
+    system_prepended: bool,
+) -> bool {
+    let Some(user_index) = path_index(paths, user) else {
+        return true;
+    };
+    system_prepended
+        || path_index(paths, system).is_some_and(|system_index| user_index > system_index)
+}
+
+fn path_index(paths: &[PathBuf], dir: &Path) -> Option<usize> {
+    let dir = canonicalize_or_self(dir);
+    paths
+        .iter()
+        .position(|path| canonicalize_or_self(path) == dir)
+}
+
 fn is_dir_first_in_paths(paths: &[PathBuf], dir: &Path) -> bool {
     let dir = canonicalize_or_self(dir);
     paths
@@ -298,7 +357,10 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
 
 #[cfg(test)]
 mod tests {
-    use super::{forwarded_logging_flags, is_dir_first_in_paths, should_prepend_shims};
+    use super::{
+        forwarded_logging_flags, is_dir_first_in_paths, should_prepend_shims,
+        should_prepend_user_tool_stubs,
+    };
     use std::path::PathBuf;
 
     fn args(values: &[&str]) -> Vec<String> {
@@ -388,6 +450,32 @@ mod tests {
         assert!(should_prepend_shims(
             std::slice::from_ref(&target),
             &target,
+            true
+        ));
+    }
+
+    #[test]
+    fn user_tool_stubs_stay_ahead_of_system_tool_stubs() {
+        let user = PathBuf::from("/user-stubs");
+        let system = PathBuf::from("/system-stubs");
+        let other = PathBuf::from("/other");
+
+        assert!(!should_prepend_user_tool_stubs(
+            &[user.clone(), system.clone(), other.clone()],
+            &user,
+            &system,
+            false
+        ));
+        assert!(should_prepend_user_tool_stubs(
+            &[system.clone(), user.clone(), other],
+            &user,
+            &system,
+            false
+        ));
+        assert!(should_prepend_user_tool_stubs(
+            std::slice::from_ref(&user),
+            &user,
+            &system,
             true
         ));
     }

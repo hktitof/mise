@@ -1,5 +1,36 @@
 #!/usr/bin/env bash
 
+# User and system catalogues publish into separate mise-owned bins. User stubs
+# shadow system stubs without modifying package-owned files.
+export MISE_SYSTEM_CONFIG_DIR="$PWD/system-config"
+export MISE_SYSTEM_DATA_DIR="$PWD/system-data"
+mkdir -p "$MISE_CONFIG_DIR" "$MISE_SYSTEM_CONFIG_DIR"
+cat >"$MISE_SYSTEM_CONFIG_DIR/tool-stubs.toml" <<'EOF'
+[commands]
+dummy-scope = { tool = "dummy", version = "1", bin = "dummy" }
+EOF
+cat >"$MISE_CONFIG_DIR/tool-stubs.toml" <<'EOF'
+[commands]
+dummy-scope = { tool = "dummy", version = "2", bin = "dummy" }
+EOF
+
+mise tool-stubs sync --system
+mise tool-stubs sync
+assert "test -x '$MISE_SYSTEM_DATA_DIR/tool-stubs/bin/dummy-scope'"
+assert "test -x '$MISE_DATA_DIR/tool-stubs/bin/dummy-scope'"
+assert_contains "mise tool-stubs status --system" "current"
+assert_contains "mise tool-stubs status" "current"
+assert_contains "PATH='$MISE_DATA_DIR/tool-stubs/bin:$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 2.0.0"
+assert_contains "PATH='$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 1.1.0"
+assert_contains "mise activate bash --no-hook-env" "$MISE_SYSTEM_DATA_DIR/tool-stubs/bin"
+assert_contains "mise activate bash --no-hook-env" "$MISE_DATA_DIR/tool-stubs/bin"
+mise uninstall dummy@1.1.0
+mise install dummy@1.0.0
+assert_contains "mise tool-stubs upgrade --system --dry-run" "Would install dummy@1.1.0"
+mise tool-stubs remove
+mise tool-stubs remove --system
+mise uninstall dummy --all
+
 mkdir -p managed-stubs/bin
 cd managed-stubs
 

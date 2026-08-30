@@ -12,6 +12,7 @@ Upgrade versions selected by managed tool stubs
 
 ## Flags
 - **`--into <DIR>`** — Directory containing the commands (normally discovered from prior sync state)
+- **`--system`** — Upgrade installed tools selected by system tool stubs
 - **`-j --jobs <JOBS>`** — Number of parallel install jobs
 
   **Environment Variable:** `MISE_JOBS`

@@ -23,7 +23,7 @@ node = { version = "22", bin = "node" }
 
 ## Subcommands
 
-- [`mise tool-stubs remove [--into <DIR>] [-f --force] <MANIFEST>`](/cli/tool-stubs/remove.md)
-- [`mise tool-stubs status [FLAGS] <MANIFEST>`](/cli/tool-stubs/status.md)
-- [`mise tool-stubs sync [--into <DIR>] [-f --force] <MANIFEST>`](/cli/tool-stubs/sync.md)
+- [`mise tool-stubs remove [FLAGS] [MANIFEST]`](/cli/tool-stubs/remove.md)
+- [`mise tool-stubs status [FLAGS] [MANIFEST]`](/cli/tool-stubs/status.md)
+- [`mise tool-stubs sync [FLAGS] [MANIFEST]`](/cli/tool-stubs/sync.md)
 - [`mise tool-stubs upgrade [FLAGS] [MANIFEST]`](/cli/tool-stubs/upgrade.md)

@@ -5575,13 +5575,16 @@ Print help
 .SH "MISE TOOL-STUBS SYNC"
 Create or update the executable stubs declared by a manifest
 .PP
-\fBUsage:\fR mise tool\-stubs sync [OPTIONS] <MANIFEST>
+\fBUsage:\fR mise tool\-stubs sync [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
 .TP
 \fB\-\-into\fR \fI<DIR>\fR
-Directory in which to write commands [default: ~/.local/bin]
+Directory in which to write commands [default: ~/.local/share/mise/tool\-stubs/bin]
+.TP
+\fB\-\-system\fR
+Use the system catalogue and system tool\-stub bin
 .TP
 \fB\-f, \-\-force\fR
 Replace modified or conflicting command files
@@ -5592,17 +5595,20 @@ Print help
 .PP
 .TP
 \fB<MANIFEST>\fR
-Path to the tool\-stub bundle manifest
+Path to the tool\-stub bundle manifest [default: ~/.config/mise/tool\-stubs.toml]
 .SH "MISE TOOL-STUBS STATUS"
 Show whether generated stubs match their manifest and ownership state
 .PP
-\fBUsage:\fR mise tool\-stubs status [OPTIONS] <MANIFEST>
+\fBUsage:\fR mise tool\-stubs status [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
 .TP
 \fB\-\-into\fR \fI<DIR>\fR
 Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-\-system\fR
+Use the system catalogue and system tool\-stub bin
 .TP
 \fB\-\-missing\fR
 Print only command names that need to be synchronized
@@ -5616,7 +5622,7 @@ Print help
 .PP
 .TP
 \fB<MANIFEST>\fR
-Path to the tool\-stub bundle manifest
+Path to the tool\-stub bundle manifest [default: ~/.config/mise/tool\-stubs.toml]
 .SH "MISE TOOL-STUBS UPGRADE"
 Upgrade versions selected by managed tool stubs
 .PP
@@ -5627,6 +5633,9 @@ Upgrade versions selected by managed tool stubs
 .TP
 \fB\-\-into\fR \fI<DIR>\fR
 Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-\-system\fR
+Upgrade installed tools selected by system tool stubs
 .TP
 \fB\-j, \-\-jobs\fR \fI<JOBS>\fR
 Number of parallel install jobs
@@ -5656,13 +5665,16 @@ Manifest whose managed stubs should be upgraded; omit to use all tracked stubs
 .SH "MISE TOOL-STUBS REMOVE"
 Remove command files owned by a synchronized bundle
 .PP
-\fBUsage:\fR mise tool\-stubs remove [OPTIONS] <MANIFEST>
+\fBUsage:\fR mise tool\-stubs remove [OPTIONS] [<MANIFEST>]
 .PP
 \fBOptions:\fR
 .PP
 .TP
 \fB\-\-into\fR \fI<DIR>\fR
 Directory containing the commands (normally discovered from prior sync state)
+.TP
+\fB\-\-system\fR
+Use the system catalogue and system tool\-stub bin
 .TP
 \fB\-f, \-\-force\fR
 Remove owned command files even when their contents were modified
@@ -5673,7 +5685,7 @@ Print help
 .PP
 .TP
 \fB<MANIFEST>\fR
-Path to the tool\-stub bundle manifest
+Path to the tool\-stub bundle manifest [default: ~/.config/mise/tool\-stubs.toml]
 .SH "MISE TRUST"
 Marks a config file as trusted
 

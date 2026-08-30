@@ -16,7 +16,7 @@ Tool stubs are particularly useful for adding less-commonly used tools to your m
 
 ## Managed Tool-Stub Bundles
 
-Use a bundle manifest when a project or operating-system setup needs to publish several commands into a bin directory:
+Use a bundle manifest when a user or operating-system setup needs to publish several commands lazily:
 
 ```toml
 [commands]
@@ -25,10 +25,36 @@ node = { version = "22", bin = "node" }
 prettier = { tool = "npm:prettier", version = "3", bin = "prettier" }
 ```
 
-Synchronize it into `~/.local/bin` (the default), or choose another directory:
+The default user catalogue is `~/.config/mise/tool-stubs.toml`. Its generated
+commands live in mise-owned data, not in the user-editable `~/.local/bin`:
 
 ```bash
-mise tool-stubs sync ./tool-stubs.toml
+mise tool-stubs sync
+```
+
+System administrators and operating-system distributions can publish a lower
+precedence catalogue at `/etc/mise/tool-stubs.toml`:
+
+```bash
+sudo mise tool-stubs sync --system
+```
+
+The two generated bins follow mise's existing data scopes:
+
+| Scope  | Manifest                                  | Generated bin                          |
+| ------ | ----------------------------------------- | -------------------------------------- |
+| User   | `$MISE_CONFIG_DIR/tool-stubs.toml`        | `$MISE_DATA_DIR/tool-stubs/bin`        |
+| System | `$MISE_SYSTEM_CONFIG_DIR/tool-stubs.toml` | `$MISE_SYSTEM_DATA_DIR/tool-stubs/bin` |
+
+`mise activate` places the user bin before the system bin. A same-named user
+stub therefore overrides a system stub without modifying it. Explicitly
+configured project tools and mise shims remain more specific and take
+precedence over both catalogues.
+
+An explicit manifest and destination remain available for project or custom
+bundles:
+
+```bash
 mise tool-stubs sync ./tool-stubs.toml --into ./bin
 ```
 
@@ -37,14 +63,21 @@ Sync only writes executable stubs; it does not install any of the declared tools
 Use `status` to audit a bundle, `upgrade` to update already-installed versions selected by its stubs, and `remove` to delete the owned command files without uninstalling their tools:
 
 ```bash
-mise tool-stubs status ./tool-stubs.toml
-mise tool-stubs status ./tool-stubs.toml --json
-mise tool-stubs status ./tool-stubs.toml --missing
-mise tool-stubs upgrade ./tool-stubs.toml
-mise tool-stubs remove ./tool-stubs.toml
+mise tool-stubs status
+mise tool-stubs status --system
+mise tool-stubs status --json
+mise tool-stubs status --missing
+mise tool-stubs upgrade
+mise tool-stubs upgrade --system
+mise tool-stubs remove
+mise tool-stubs remove --system
 ```
 
-`mise upgrade --tool-stubs` includes all tracked stubs in a normal upgrade. Replaced versions follow the same `upgrade.prune_after`, `--prune`, and `--no-prune` behavior as config-selected tools.
+`mise upgrade --tool-stubs` includes tracked user stubs and published system
+stubs in a normal upgrade. The stubs remain system-owned, but any lazily
+installed tools and upgrades belong to the user running mise. Replaced versions
+follow the same `upgrade.prune_after`, `--prune`, and `--no-prune` behavior as
+config-selected tools.
 
 ## Tool (non-http) Stubs
 

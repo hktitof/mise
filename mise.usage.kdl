@@ -4065,12 +4065,13 @@ node = { version = "22", bin = "node" }
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd sync help="Create or update the executable stubs declared by a manifest" effect=write {
-        flag --into help="Directory in which to write commands [default: ~/.local/bin]" {
+        flag --into help="Directory in which to write commands [default: ~/.local/share/mise/tool-stubs/bin]" {
             arg <DIR>
         }
+        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
         flag "-f --force" help="Replace modified or conflicting command files"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
         complete manifest type=path
         complete dir type=dir
     }
@@ -4078,10 +4079,11 @@ node = { version = "22", bin = "node" }
         flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
             arg <DIR>
         }
+        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
         flag --missing help="Print only command names that need to be synchronized"
         flag --json help="Print structured status as JSON"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
         complete manifest type=path
         complete dir type=dir
     }
@@ -4089,6 +4091,7 @@ node = { version = "22", bin = "node" }
         flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
             arg <DIR>
         }
+        flag --system help="Upgrade installed tools selected by system tool stubs" conflicts=--into
         flag "-j --jobs" help="Number of parallel install jobs" env=MISE_JOBS {
             arg <JOBS>
         }
@@ -4105,9 +4108,10 @@ node = { version = "22", bin = "node" }
         flag --into help="Directory containing the commands (normally discovered from prior sync state)" {
             arg <DIR>
         }
+        flag --system help="Use the system catalogue and system tool-stub bin" conflicts=--into
         flag "-f --force" help="Remove owned command files even when their contents were modified"
         flag "-h --help" help="Print help" action=help builtin=#true
-        arg <MANIFEST> help="Path to the tool-stub bundle manifest"
+        arg "[MANIFEST]" help="Path to the tool-stub bundle manifest [default: ~/.config/mise/tool-stubs.toml]" required=#false
         complete manifest type=path
         complete dir type=dir
     }

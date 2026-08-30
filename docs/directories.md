@@ -91,3 +91,20 @@ Setting it there can make an install use one directory while later commands and 
 
 This is where mise places shims. Generally these are used for IDE integration or if `mise activate`
 does not work for some reason.
+
+### `~/.local/share/mise/tool-stubs/bin`
+
+This is the generated bin directory for the user tool-stub catalogue at
+`~/.config/mise/tool-stubs.toml`. `mise activate` adds it to `PATH` ahead of the
+system tool-stub bin. The files are managed output; customize commands in the
+catalogue rather than editing generated stubs.
+
+## `/usr/local/share/mise`
+
+- Override: `$MISE_SYSTEM_DATA_DIR`
+
+This is the system-level counterpart to `$MISE_DATA_DIR`. System tool installs
+live under `installs`, while commands generated from
+`/etc/mise/tool-stubs.toml` live under `tool-stubs/bin`. System files are
+lower-precedence defaults: user tool stubs with the same command name override
+them.
