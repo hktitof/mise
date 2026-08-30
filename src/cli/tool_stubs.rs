@@ -255,7 +255,14 @@ impl Sync {
         }
 
         file::create_dir_all(&bundle.into)?;
+        let mut managed_commands = bundle
+            .state
+            .as_ref()
+            .map(|state| state.commands.clone())
+            .unwrap_or_default();
 
+        // Checkpoint after each command so an interrupted sync can resume
+        // without treating mise's own completed writes as foreign output.
         // Remove commands deleted from the manifest before writing the new set.
         if let Some(state) = &bundle.state {
             for (name, managed) in &state.commands {
@@ -275,10 +282,11 @@ impl Sync {
                     file::remove_file(&managed.path)?;
                 }
                 Tracker::untrack_stub(&managed.path)?;
+                managed_commands.remove(name);
+                save_progress(&bundle, &source_hash, &managed_commands)?;
             }
         }
 
-        let mut managed_commands = BTreeMap::new();
         let status_by_name = statuses
             .iter()
             .map(|status| (status.command.as_str(), status.status))
@@ -300,19 +308,29 @@ impl Sync {
                     content_hash: command.content_hash.clone(),
                 },
             );
+            save_progress(&bundle, &source_hash, &managed_commands)?;
         }
 
-        let state = BundleState {
-            schema_version: STATE_SCHEMA_VERSION,
-            id: bundle.id,
-            source_path: bundle.source_path,
-            source_hash,
-            into: bundle.into,
-            commands: managed_commands,
-        };
-        save_state(&bundle.state_path, &state)?;
-        Ok(())
+        save_progress(&bundle, &source_hash, &managed_commands)
     }
+}
+
+fn save_progress(
+    bundle: &Bundle,
+    source_hash: &str,
+    commands: &BTreeMap<String, ManagedCommand>,
+) -> Result<()> {
+    save_state(
+        &bundle.state_path,
+        &BundleState {
+            schema_version: STATE_SCHEMA_VERSION,
+            id: bundle.id.clone(),
+            source_path: bundle.source_path.clone(),
+            source_hash: source_hash.to_string(),
+            into: bundle.into.clone(),
+            commands: commands.clone(),
+        },
+    )
 }
 
 impl Status {
@@ -754,9 +772,6 @@ fn classify_path(
         return Ok(StatusKind::Conflict);
     }
     let actual_hash = file_hash(path)?;
-    if actual_hash == expected_hash && (cfg!(windows) || file::is_executable(path)) {
-        return Ok(StatusKind::Current);
-    }
     let contents = match file::read_to_string(path) {
         Ok(contents) => contents,
         Err(_) => return Ok(StatusKind::Conflict),
@@ -766,6 +781,13 @@ fn classify_path(
         .any(|line| line == format!("{MANAGED_MARKER_PREFIX}{bundle_id}"));
     if !owned {
         return Ok(StatusKind::Conflict);
+    }
+    if actual_hash == expected_hash {
+        return Ok(if cfg!(windows) || file::is_executable(path) {
+            StatusKind::Current
+        } else {
+            StatusKind::Stale
+        });
     }
     match previous {
         Some(managed) if managed.content_hash != actual_hash => Ok(StatusKind::Modified),
@@ -845,6 +867,26 @@ mod tests {
         assert_eq!(
             classify_path(&path, "different", "bundle", None).unwrap(),
             StatusKind::Conflict
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resumes_an_unrecorded_managed_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("rg");
+        let contents = "# managed by mise tool-stubs bundle bundle\n";
+        std::fs::write(&path, contents).unwrap();
+
+        assert_eq!(
+            classify_path(
+                &path,
+                &crate::hash::hash_sha256_to_str(contents),
+                "bundle",
+                None
+            )
+            .unwrap(),
+            StatusKind::Stale
         );
     }
 
