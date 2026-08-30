@@ -652,10 +652,18 @@ fn rollback_transaction(
         let destination = bundle.into.join(name);
         let original = originals.join(name);
         let result = if path_exists(&original) {
-            remove_transaction_destination(&destination, change.installed_hash.as_deref())
-                .and_then(|()| fs::rename(&original, &destination).map_err(Into::into))
+            remove_transaction_destination(
+                &destination,
+                &record.bundle_id,
+                change.installed_hash.as_deref(),
+            )
+            .and_then(|()| fs::rename(&original, &destination).map_err(Into::into))
         } else if !change.had_original {
-            remove_transaction_destination(&destination, change.installed_hash.as_deref())
+            remove_transaction_destination(
+                &destination,
+                &record.bundle_id,
+                change.installed_hash.as_deref(),
+            )
         } else {
             Ok(())
         };
@@ -683,7 +691,11 @@ fn rollback_transaction(
     }
 }
 
-fn remove_transaction_destination(path: &Path, installed_hash: Option<&str>) -> Result<()> {
+fn remove_transaction_destination(
+    path: &Path,
+    bundle_id: &str,
+    installed_hash: Option<&str>,
+) -> Result<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -708,6 +720,11 @@ fn remove_transaction_destination(path: &Path, installed_hash: Option<&str>) -> 
     ensure!(
         file_hash(path)? == installed_hash,
         "refusing to remove a file changed after the interrupted sync: {}",
+        display_path(path)
+    );
+    ensure!(
+        file_is_owned_by_bundle(path, bundle_id),
+        "refusing to remove a file owned by another tool-stub bundle while recovering: {}",
         display_path(path)
     );
     fs::remove_file(path).map_err(Into::into)
@@ -836,44 +853,48 @@ impl Upgrade {
 
 impl Remove {
     fn run(self) -> Result<()> {
-        let mut bundle =
-            resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
-        let _into_lock = crate::lock_file::get(&bundle.into, false)?;
-        let _lock = crate::lock_file::get(&bundle.state_path, false)?;
-        bundle.state = load_state(&bundle.state_path)?;
-        let Some(state) = bundle.state else {
-            info!(
-                "tool-stub bundle is not synchronized: {}",
-                display_path(&bundle.source_path)
-            );
-            return Ok(());
-        };
+        let bundle = resolve_bundle(self.manifest.as_deref(), self.into.as_deref(), self.system)?;
+        remove_bundle(bundle, self.force)
+    }
+}
 
-        for (name, managed) in &state.commands {
-            validate_managed_path(&state, name, &managed.path)?;
-            if path_exists(&managed.path) {
-                let unchanged = !managed.path.is_symlink()
-                    && managed.path.is_file()
-                    && file_hash(&managed.path)? == managed.content_hash;
-                ensure!(
-                    unchanged || self.force,
-                    "refusing to remove modified tool stub {}; use --force",
-                    display_path(&managed.path)
-                );
-            }
+fn remove_bundle(mut bundle: Bundle, force: bool) -> Result<()> {
+    let _into_lock = crate::lock_file::get(&bundle.into, false)?;
+    let _lock = crate::lock_file::get(&bundle.state_path, false)?;
+    recover_interrupted_sync(&bundle)?;
+    bundle.state = load_state(&bundle.state_path)?;
+    let Some(state) = bundle.state else {
+        info!(
+            "tool-stub bundle is not synchronized: {}",
+            display_path(&bundle.source_path)
+        );
+        return Ok(());
+    };
+
+    for (name, managed) in &state.commands {
+        validate_managed_path(&state, name, &managed.path)?;
+        if path_exists(&managed.path) {
+            let unchanged = !managed.path.is_symlink()
+                && managed.path.is_file()
+                && file_hash(&managed.path)? == managed.content_hash;
+            ensure!(
+                unchanged || force,
+                "refusing to remove modified tool stub {}; use --force",
+                display_path(&managed.path)
+            );
         }
-        for managed in state.commands.values() {
-            if path_exists(&managed.path) {
-                file::remove_file(&managed.path)?;
-                info!("removed {}", display_path(&managed.path));
-            }
-            Tracker::untrack_stub(&managed.path)?;
+    }
+    for managed in state.commands.values() {
+        if path_exists(&managed.path) {
+            file::remove_file(&managed.path)?;
+            info!("removed {}", display_path(&managed.path));
         }
-        match std::fs::remove_file(&bundle.state_path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err.into()),
-        }
+        Tracker::untrack_stub(&managed.path)?;
+    }
+    match std::fs::remove_file(&bundle.state_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -1202,14 +1223,7 @@ fn classify_path(
         return Ok(StatusKind::Conflict);
     }
     let actual_hash = file_hash(path)?;
-    let contents = match file::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(_) => return Ok(StatusKind::Conflict),
-    };
-    let owned = contents
-        .lines()
-        .any(|line| line == format!("{MANAGED_MARKER_PREFIX}{bundle_id}"));
-    if !owned {
+    if !file_is_owned_by_bundle(path, bundle_id) {
         return Ok(StatusKind::Conflict);
     }
     if actual_hash == expected_hash {
@@ -1224,6 +1238,16 @@ fn classify_path(
         Some(_) => Ok(StatusKind::Stale),
         None => Ok(StatusKind::Conflict),
     }
+}
+
+fn file_is_owned_by_bundle(path: &Path, bundle_id: &str) -> bool {
+    let contents = match file::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return false,
+    };
+    contents
+        .lines()
+        .any(|line| line == format!("{MANAGED_MARKER_PREFIX}{bundle_id}"))
 }
 
 fn path_exists(path: &Path) -> bool {
@@ -1429,6 +1453,83 @@ mod tests {
         assert!(recover_interrupted_sync(&bundle).is_err());
         assert_eq!(std::fs::read_to_string(command).unwrap(), "user-created");
         assert!(transaction_path(&bundle).exists());
+    }
+
+    #[test]
+    fn recovery_preserves_a_file_owned_by_another_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        std::fs::create_dir(&into).unwrap();
+        let id = bundle_id(&source_path, &into);
+        let bundle = Bundle {
+            id: id.clone(),
+            source_path,
+            manifest_path: None,
+            into: into.clone(),
+            state_path: tmp.path().join("state").join(format!("{id}.json")),
+            state: None,
+            system: false,
+        };
+        let command = into.join("rg");
+        let staged = into.join("staged-rg");
+        let other_contents = render_command("other-bundle", "rg", "dummy@1".into()).unwrap();
+        std::fs::write(&staged, &other_contents).unwrap();
+        let changes = BTreeMap::from([("rg".into(), (command.clone(), Some(staged.clone())))]);
+
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &BTreeMap::new()).unwrap();
+        transaction.install(&staged, &command).unwrap();
+        drop(transaction);
+
+        assert!(recover_interrupted_sync(&bundle).is_err());
+        assert_eq!(std::fs::read_to_string(command).unwrap(), other_contents);
+        assert!(transaction_path(&bundle).exists());
+    }
+
+    #[test]
+    fn remove_recovers_an_interrupted_sync_before_removing_the_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source_path = tmp.path().join("stubs.toml");
+        let into = tmp.path().join("bin");
+        std::fs::create_dir(&into).unwrap();
+        let id = bundle_id(&source_path, &into);
+        let state_path = tmp.path().join("state").join(format!("{id}.json"));
+        let command = into.join("rg");
+        let contents = render_command(&id, "rg", "dummy@1".into()).unwrap();
+        std::fs::write(&command, &contents).unwrap();
+        let state = BundleState {
+            schema_version: STATE_SCHEMA_VERSION,
+            id: id.clone(),
+            source_path: source_path.clone(),
+            source_hash: "source".into(),
+            into: into.clone(),
+            commands: BTreeMap::from([(
+                "rg".into(),
+                ManagedCommand {
+                    path: command.clone(),
+                    content_hash: file_hash(&command).unwrap(),
+                },
+            )]),
+        };
+        save_state(&state_path, &state).unwrap();
+        let bundle = Bundle {
+            id,
+            source_path,
+            manifest_path: None,
+            into,
+            state_path: state_path.clone(),
+            state: Some(state),
+            system: false,
+        };
+        let changes = BTreeMap::from([("rg".into(), (command.clone(), None))]);
+        let transaction = SyncFileTransaction::begin(&bundle, &changes, &BTreeMap::new()).unwrap();
+        transaction.back_up("rg", &command).unwrap();
+        drop(transaction);
+
+        remove_bundle(bundle, false).unwrap();
+
+        assert!(!command.exists());
+        assert!(!state_path.exists());
     }
 
     #[test]
