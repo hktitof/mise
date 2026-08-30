@@ -27,35 +27,28 @@ const MANAGED_MARKER_PREFIX: &str = "# managed by mise tool-stubs bundle ";
 /// rg = "ripgrep@14"
 /// node = { version = "22", bin = "node" }
 /// ```
-#[derive(Debug, usage_rs::Args)]
-#[usage(verbatim_doc_comment)]
-pub(crate) struct ToolStubs {
-    #[usage(subcommand)]
-    command: Commands,
-}
-
 #[derive(Debug, usage_rs::Subcommands)]
-enum Commands {
+pub(crate) enum Commands {
     Sync(Sync),
     Status(Status),
     Upgrade(Upgrade),
     Remove(Remove),
 }
 
-impl ToolStubs {
+impl Commands {
     pub(crate) async fn run(self) -> Result<()> {
-        match self.command {
-            Commands::Sync(cmd) => cmd.run().await,
-            Commands::Status(cmd) => cmd.run().await,
-            Commands::Upgrade(cmd) => cmd.run().await,
-            Commands::Remove(cmd) => cmd.run(),
+        match self {
+            Self::Sync(cmd) => cmd.run().await,
+            Self::Status(cmd) => cmd.run().await,
+            Self::Upgrade(cmd) => cmd.run().await,
+            Self::Remove(cmd) => cmd.run(),
         }
     }
 }
 
 /// Create or update executable stubs declared in configuration
 #[derive(Debug, usage_rs::Args)]
-struct Sync {
+pub(crate) struct Sync {
     /// Custom manifest; omit to read [tool_stubs] from the selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
@@ -75,7 +68,7 @@ struct Sync {
 
 /// Show whether generated stubs match their source configuration and ownership state
 #[derive(Debug, usage_rs::Args)]
-struct Status {
+pub(crate) struct Status {
     /// Custom manifest; omit to read [tool_stubs] from the selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
@@ -99,7 +92,7 @@ struct Status {
 
 /// Upgrade versions selected by managed tool stubs
 #[derive(Debug, usage_rs::Args)]
-struct Upgrade {
+pub(crate) struct Upgrade {
     /// Custom manifest whose managed stubs should be upgraded; omit for tracked stubs
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,
@@ -135,7 +128,7 @@ struct Upgrade {
 
 /// Remove command files owned by a synchronized bundle
 #[derive(Debug, usage_rs::Args)]
-struct Remove {
+pub(crate) struct Remove {
     /// Custom manifest; omit to use the synchronized selected config scope
     #[usage(value_name = "MANIFEST", value_hint = usage_rs::ValueHint::FilePath)]
     manifest: Option<PathBuf>,

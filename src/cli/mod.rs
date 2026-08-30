@@ -278,7 +278,6 @@ pub(crate) enum Commands {
     Token(token::Token),
     Tool(tool::Tool),
     ToolStub(tool_stub::ToolStub),
-    ToolStubs(tool_stubs::ToolStubs),
     Trust(trust::Trust),
     Uninstall(uninstall::Uninstall),
     Unset(unset::Unset),
@@ -399,7 +398,6 @@ impl Commands {
             Self::Token(cmd) => cmd.run().await,
             Self::Tool(cmd) => cmd.run().await,
             Self::ToolStub(cmd) => cmd.run().await,
-            Self::ToolStubs(cmd) => cmd.run().await,
             Self::Trust(cmd) => cmd.run().await,
             Self::Uninstall(cmd) => cmd.run().await,
             Self::Unset(cmd) => cmd.run().await,
@@ -1188,8 +1186,21 @@ mod tests {
         let Some(Commands::ToolStub(tool_stub)) = cli.command else {
             panic!("expected tool-stub command")
         };
-        assert_eq!(tool_stub.file, PathBuf::from("jqstub"));
+        assert_eq!(tool_stub.file, Some(PathBuf::from("jqstub")));
         assert_eq!(tool_stub.args, ["--version"]);
+    }
+
+    #[test]
+    fn tool_stub_dispatches_management_subcommands() {
+        let cli = parse_cli(&["mise", "tool-stub", "sync", "--system"]).unwrap();
+        let Some(Commands::ToolStub(tool_stub)) = cli.command else {
+            panic!("expected tool-stub command")
+        };
+        assert!(matches!(
+            tool_stub.command,
+            Some(tool_stubs::Commands::Sync(_))
+        ));
+        assert!(tool_stub.file.is_none());
     }
 
     #[test]

@@ -4012,9 +4012,9 @@ cmd tool help="Gets information about a tool" effect=read {
     arg <TOOL> help="Tool name to get information about"
     group tool-info-filter "--active" "--backend" "--config-source" "--description" "--installed" "--requested" "--tool-options"
 }
-cmd tool-stub disable_help_flag=#true disable_version_flag=#true help="Execute a tool stub" {
+cmd tool-stub disable_help_flag=#true disable_version_flag=#true help="Execute and manage tool stubs" {
     long_help #"""
-Execute a tool stub
+Execute and manage tool stubs
 
 Tool stubs are executable files containing TOML configuration that specify which tool to run and how to run it. They provide a convenient way to create portable, self-contained executables that automatically manage tool installation and execution.
 
@@ -4033,37 +4033,20 @@ version = "20.0.0"
 bin = "node"
 ```
 
-The stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub.
+The stub will automatically install the specified tool version if missing and execute it with any arguments passed to the stub. Management subcommands synchronize the `[tool_stubs]` catalogues declared in user and system config.
 
 For more information, see: https://mise.jdx.dev/dev-tools/tool-stubs.html
 """#
-    arg <FILE> help="Path to the TOML tool stub file to execute" help_long=#"""
+    arg "[FILE]" help="Path to the TOML tool stub file to execute" help_long=#"""
 Path to the TOML tool stub file to execute
 
 The stub file must contain TOML configuration specifying the tool and version to run. At minimum, it should specify a 'version' field. Other common fields include 'tool', 'bin', and backend-specific options.
-"""# double_dash=automatic
+"""# required=#false double_dash=automatic
     arg "[ARGS]…" help="Arguments to pass to the tool" help_long=#"""
 Arguments to pass to the tool
 
 All arguments after the stub file path will be forwarded to the underlying tool. Use '--' to separate mise arguments from tool arguments if needed.
 """# required=#false double_dash=automatic var=#true
-}
-cmd tool-stubs subcommand_required=#true help="Manage executable tool stubs declared in mise configuration" effect=read {
-    long_help #"""
-Manage executable tool stubs declared in mise configuration
-
-Normal system and user configs declare commands under `[tool_stubs]`.
-String values use `tool@version` syntax; tables accept the same fields as
-`mise tool-stub`. Syncing writes executable stubs without installing their
-tools. The first invocation installs its declared version lazily.
-
-```toml
-[tool_stubs]
-rg = "ripgrep@14"
-node = { version = "22", bin = "node" }
-```
-"""#
-    flag "-h --help" help="Print help" action=help builtin=#true
     cmd sync help="Create or update executable stubs declared in configuration" effect=write {
         flag --into help="Directory in which to write commands from a custom manifest" {
             arg <DIR>

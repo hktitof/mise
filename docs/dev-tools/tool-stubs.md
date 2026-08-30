@@ -31,7 +31,7 @@ User tool stubs follow normal user-config layering, including
 commands live in mise-owned data, not in the user-editable `~/.local/bin`:
 
 ```bash
-mise tool-stubs sync
+mise tool-stub sync
 ```
 
 System administrators and operating-system distributions can put lower
@@ -39,7 +39,7 @@ precedence declarations in normal system config, such as
 `/etc/mise/config.toml` or `/etc/mise/conf.d/*.toml`:
 
 ```bash
-sudo mise tool-stubs sync --system
+sudo mise tool-stub sync --system
 ```
 
 The two generated bins follow mise's existing data scopes:
@@ -62,7 +62,7 @@ An explicit manifest and destination remain available for project or custom
 bundles. Custom manifests declare commands under `[commands]`:
 
 ```bash
-mise tool-stubs sync ./tool-stubs.toml --into ./bin
+mise tool-stub sync ./tool-stubs.toml --into ./bin
 ```
 
 ```toml
@@ -75,14 +75,14 @@ Sync only writes executable stubs; it does not install any of the declared tools
 Use `status` to audit a bundle, `upgrade` to update already-installed versions selected by its stubs, and `remove` to delete the owned command files without uninstalling their tools:
 
 ```bash
-mise tool-stubs status
-mise tool-stubs status --system
-mise tool-stubs status --json
-mise tool-stubs status --missing
-mise tool-stubs upgrade
-mise tool-stubs upgrade --system
-mise tool-stubs remove
-mise tool-stubs remove --system
+mise tool-stub status
+mise tool-stub status --system
+mise tool-stub status --json
+mise tool-stub status --missing
+mise tool-stub upgrade
+mise tool-stub upgrade --system
+mise tool-stub remove
+mise tool-stub remove --system
 ```
 
 `mise upgrade --tool-stubs` includes tracked user stubs and published system

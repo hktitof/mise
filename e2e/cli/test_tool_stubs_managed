@@ -21,21 +21,21 @@ assert_fail "test -d '$MISE_DATA_DIR/tool-stubs/bin'"
 assert_contains "mise activate bash --no-hook-env" "$MISE_SYSTEM_DATA_DIR/tool-stubs/bin"
 assert_contains "mise activate bash --no-hook-env" "$MISE_DATA_DIR/tool-stubs/bin"
 eval "$(mise activate bash --no-hook-env)"
-mise tool-stubs sync --system
-mise tool-stubs sync
+mise tool-stub sync --system
+mise tool-stub sync
 assert "test -x '$MISE_SYSTEM_DATA_DIR/tool-stubs/bin/dummy-scope'"
 assert "test -x '$MISE_DATA_DIR/tool-stubs/bin/dummy-scope'"
-assert_contains "mise tool-stubs status --system" "current"
-assert_contains "mise tool-stubs status" "current"
+assert_contains "mise tool-stub status --system" "current"
+assert_contains "mise tool-stub status" "current"
 assert_contains "PATH='$MISE_DATA_DIR/tool-stubs/bin:$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 2.0.0"
 assert_contains "PATH='$MISE_SYSTEM_DATA_DIR/tool-stubs/bin:$PATH' dummy-scope" "This is Dummy 1.1.0"
 assert_contains "dummy-scope" "This is Dummy 2.0.0"
 
 # Clearing the last declaration reconciles away previously managed stubs.
 printf '[settings]\n' >"$MISE_CONFIG_DIR/config.toml"
-mise tool-stubs sync
+mise tool-stub sync
 assert_fail "test -e '$MISE_DATA_DIR/tool-stubs/bin/dummy-scope'"
-assert "mise tool-stubs status --missing" ""
+assert "mise tool-stub status --missing" ""
 
 mkdir -p "$MISE_DATA_DIR/shims"
 cat >check-shim-precedence.sh <<'EOF'
@@ -45,9 +45,9 @@ EOF
 assert "PATH='$MISE_DATA_DIR/shims:$PATH' bash check-shim-precedence.sh"
 mise uninstall dummy@1.1.0
 mise install dummy@1.0.0
-assert_contains "mise tool-stubs upgrade --system --dry-run" "Would install dummy@1.1.0"
-mise tool-stubs remove
-mise tool-stubs remove --system
+assert_contains "mise tool-stub upgrade --system --dry-run" "Would install dummy@1.1.0"
+mise tool-stub remove
+mise tool-stub remove --system
 mise uninstall dummy --all
 
 mkdir -p managed-stubs/bin
@@ -59,23 +59,23 @@ dummy-one = { tool = "dummy", version = "1", bin = "dummy" }
 EOF
 
 # Sync writes an executable stub but preserves lazy installation.
-mise tool-stubs sync stubs.toml --into ./bin
+mise tool-stub sync stubs.toml --into ./bin
 assert "test -x bin/dummy-one"
 assert_contains "cat bin/dummy-one" "managed by mise tool-stubs bundle"
-assert_contains "mise tool-stubs status stubs.toml" "current"
+assert_contains "mise tool-stub status stubs.toml" "current"
 assert_not_contains "mise ls --installed dummy" "1.1.0"
 assert_contains "./bin/dummy-one" "This is Dummy 1.1.0"
 
 # Manifest changes are stale, while edits to generated files are modified.
 sed -i 's/version = "1"/version = "2"/' stubs.toml
-assert_contains "mise tool-stubs status stubs.toml" "stale"
-mise tool-stubs sync stubs.toml
+assert_contains "mise tool-stub status stubs.toml" "stale"
+mise tool-stub sync stubs.toml
 assert_contains "cat bin/dummy-one" 'version = "2"'
 
 printf '\n# local edit\n' >>bin/dummy-one
-assert_contains "mise tool-stubs status stubs.toml" "modified"
-assert_fail "mise tool-stubs sync stubs.toml"
-mise tool-stubs sync stubs.toml --force
+assert_contains "mise tool-stub status stubs.toml" "modified"
+assert_fail "mise tool-stub sync stubs.toml"
+mise tool-stub sync stubs.toml --force
 assert_not_contains "cat bin/dummy-one" "local edit"
 assert_contains "./bin/dummy-one" "This is Dummy 2.0.0"
 
@@ -88,10 +88,10 @@ cat >stubs.toml <<'EOF'
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 collision = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
-assert_contains "mise tool-stubs status stubs.toml" "conflict"
-assert_fail "mise tool-stubs sync stubs.toml"
+assert_contains "mise tool-stub status stubs.toml" "conflict"
+assert_fail "mise tool-stub sync stubs.toml"
 assert_contains "od -An -tx1 bin/collision" "ff fe 00"
-mise tool-stubs sync stubs.toml --force
+mise tool-stub sync stubs.toml --force
 assert_contains "cat bin/collision" "managed by mise tool-stubs bundle"
 
 # Commands removed from the manifest are removed only when still owned.
@@ -99,7 +99,7 @@ cat >stubs.toml <<'EOF'
 [commands]
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
-mise tool-stubs sync stubs.toml
+mise tool-stub sync stubs.toml
 assert_fail "test -e bin/collision"
 
 # A failure after reconciliation starts restores the complete old catalogue.
@@ -108,14 +108,14 @@ cat >stubs.toml <<'EOF'
 aa-rollback-old = { tool = "dummy", version = "2", bin = "dummy" }
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
-mise tool-stubs sync stubs.toml
+mise tool-stub sync stubs.toml
 cat >stubs.toml <<'EOF'
 [commands]
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 zz-rollback-blocked = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
 mkdir bin/zz-rollback-blocked
-assert_fail "mise tool-stubs sync stubs.toml --force"
+assert_fail "mise tool-stub sync stubs.toml --force"
 assert "test -x bin/aa-rollback-old"
 rmdir bin/zz-rollback-blocked
 cat >stubs.toml <<'EOF'
@@ -123,23 +123,23 @@ cat >stubs.toml <<'EOF'
 aa-rollback-old = { tool = "dummy", version = "2", bin = "dummy" }
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
-assert_contains "mise tool-stubs status stubs.toml" "current   aa-rollback-old"
+assert_contains "mise tool-stub status stubs.toml" "current   aa-rollback-old"
 cat >stubs.toml <<'EOF'
 [commands]
 dummy-one = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
-mise tool-stubs sync stubs.toml
+mise tool-stub sync stubs.toml
 assert_fail "test -e bin/aa-rollback-old"
 
 # --missing is concise enough for provisioning scripts.
 rm bin/dummy-one
-assert "mise tool-stubs status stubs.toml --missing" "dummy-one"
-mise tool-stubs sync stubs.toml
+assert "mise tool-stub status stubs.toml --missing" "dummy-one"
+mise tool-stub sync stubs.toml
 
 # Removal protects edits and never uninstalls tools.
 printf '\n# keep me\n' >>bin/dummy-one
-assert_fail "mise tool-stubs remove stubs.toml"
-mise tool-stubs remove stubs.toml --force
+assert_fail "mise tool-stub remove stubs.toml"
+mise tool-stub remove stubs.toml --force
 assert_fail "test -e bin/dummy-one"
 assert_contains "mise ls --installed dummy" "2.0.0"
 
@@ -149,10 +149,10 @@ cat >stubs.toml <<'EOF'
 [commands]
 dummy-one = { tool = "dummy", version = "1", bin = "dummy" }
 EOF
-mise tool-stubs sync stubs.toml --into ./bin
+mise tool-stub sync stubs.toml --into ./bin
 mise install dummy@1.0.0
-assert_contains "mise tool-stubs upgrade stubs.toml --dry-run" "Would install dummy@1.1.0"
-mise tool-stubs upgrade stubs.toml --no-prune
+assert_contains "mise tool-stub upgrade stubs.toml --dry-run" "Would install dummy@1.1.0"
+mise tool-stub upgrade stubs.toml --no-prune
 assert_contains "mise ls --installed dummy" "1.1.0"
 assert_contains "mise ls --installed dummy" "1.0.0"
 
@@ -169,9 +169,9 @@ assert_contains "mise ls --installed dummy" "1.1.0"
 # Immediate pruning reconciles aliases that pointed at the replaced version.
 mise uninstall dummy@1.1.0
 ln -s ./1.0.0 "$MISE_DATA_DIR/installs/dummy/retired-stub"
-mise tool-stubs upgrade stubs.toml --prune
+mise tool-stub upgrade stubs.toml --prune
 assert_not_contains "mise ls --installed dummy" "1.0.0"
 assert_fail "test -L '$MISE_DATA_DIR/installs/dummy/retired-stub'"
 
-mise tool-stubs remove stubs.toml
+mise tool-stub remove stubs.toml
 rm -f stubs.toml

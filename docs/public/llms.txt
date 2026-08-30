@@ -279,12 +279,11 @@
 - [mise tool-alias ls](https://mise.jdx.dev/cli/tool-alias/ls.html): List tool version aliases Shows the aliases that can be specified. These can come from user config or from plugins in bin/list-aliases.
 - [mise tool-alias set](https://mise.jdx.dev/cli/tool-alias/set.html): Add/update an alias for a tool/backend
 - [mise tool-alias unset](https://mise.jdx.dev/cli/tool-alias/unset.html): Clears an alias for a tool/backend
-- [mise tool-stub](https://mise.jdx.dev/cli/tool-stub.html): Execute a tool stub
-- [mise tool-stubs](https://mise.jdx.dev/cli/tool-stubs.html): Manage executable tool stubs declared in mise configuration
-- [mise tool-stubs remove](https://mise.jdx.dev/cli/tool-stubs/remove.html): Remove command files owned by a synchronized bundle
-- [mise tool-stubs status](https://mise.jdx.dev/cli/tool-stubs/status.html): Show whether generated stubs match their source configuration and ownership state
-- [mise tool-stubs sync](https://mise.jdx.dev/cli/tool-stubs/sync.html): Create or update executable stubs declared in configuration
-- [mise tool-stubs upgrade](https://mise.jdx.dev/cli/tool-stubs/upgrade.html): Upgrade versions selected by managed tool stubs
+- [mise tool-stub](https://mise.jdx.dev/cli/tool-stub.html): Execute and manage tool stubs
+- [mise tool-stub remove](https://mise.jdx.dev/cli/tool-stub/remove.html): Remove command files owned by a synchronized bundle
+- [mise tool-stub status](https://mise.jdx.dev/cli/tool-stub/status.html): Show whether generated stubs match their source configuration and ownership state
+- [mise tool-stub sync](https://mise.jdx.dev/cli/tool-stub/sync.html): Create or update executable stubs declared in configuration
+- [mise tool-stub upgrade](https://mise.jdx.dev/cli/tool-stub/upgrade.html): Upgrade versions selected by managed tool stubs
 - [mise trust](https://mise.jdx.dev/cli/trust.html): Marks a config file as trusted
 - [mise uninstall](https://mise.jdx.dev/cli/uninstall.html): Removes installed tool versions
 - [mise unset](https://mise.jdx.dev/cli/unset.html): Remove environment variable(s) from the config file.

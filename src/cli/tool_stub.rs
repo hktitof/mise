@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::backend::static_helpers::lookup_platform_key;
+use crate::cli::tool_stubs::Commands;
 use crate::config::Config;
 use crate::config::env_directive::EnvValue;
 use crate::dirs;
@@ -640,7 +641,7 @@ async fn execute_with_tool_request(
     }
 }
 
-/// Execute a tool stub
+/// Execute and manage tool stubs
 ///
 /// Tool stubs are executable files containing TOML configuration that specify
 /// which tool to run and how to run it. They provide a convenient way to create
@@ -665,19 +666,23 @@ async fn execute_with_tool_request(
 /// ```
 ///
 /// The stub will automatically install the specified tool version if missing
-/// and execute it with any arguments passed to the stub.
+/// and execute it with any arguments passed to the stub. Management subcommands
+/// synchronize the `[tool_stubs]` catalogues declared in user and system config.
 ///
 /// For more information, see: https://mise.jdx.dev/dev-tools/tool-stubs.html
 #[derive(Debug, usage_rs::Args)]
 #[usage(disable_help_flag = true, disable_version_flag = true)]
 pub(crate) struct ToolStub {
+    #[usage(subcommand)]
+    pub(crate) command: Option<Commands>,
+
     /// Path to the TOML tool stub file to execute
     ///
     /// The stub file must contain TOML configuration specifying the tool
     /// and version to run. At minimum, it should specify a 'version' field.
     /// Other common fields include 'tool', 'bin', and backend-specific options.
     #[usage(value_name = "FILE", double_dash = "automatic")]
-    pub file: PathBuf,
+    pub file: Option<PathBuf>,
 
     /// Arguments to pass to the tool
     ///
@@ -690,8 +695,14 @@ pub(crate) struct ToolStub {
 
 impl ToolStub {
     pub(crate) async fn run(self) -> Result<()> {
+        if let Some(command) = self.command {
+            return command.run().await;
+        }
+        let file = self
+            .file
+            .ok_or_else(|| eyre!("a tool-stub path or management subcommand is required"))?;
         // Ignore clap parsing and use raw args from env::ARGS to avoid version flag interception
-        let file_str = self.file.to_string_lossy();
+        let file_str = file.to_string_lossy();
 
         // Find our file in the global args and take everything after it
         let args = {
@@ -704,19 +715,19 @@ impl ToolStub {
             }
         }; // Drop the lock before await
 
-        let stub = ToolStubFile::from_file(&self.file)?;
+        let stub = ToolStubFile::from_file(&file)?;
 
         // Track the stub so `mise prune` knows its tool is still needed. Stubs
         // can live anywhere, so execution time is the only chance to find them.
         // absolute() rather than canonicalize() so a symlinked stub keeps its
         // invoked filename, which the tool name can be derived from.
-        let stub_path = std::path::absolute(&self.file).unwrap_or_else(|_| self.file.clone());
+        let stub_path = std::path::absolute(&file).unwrap_or_else(|_| file.clone());
         if let Err(err) = crate::config::tracking::Tracker::track_stub(&stub_path) {
             crate::warn!("tracking tool stub: {err:#}");
         }
 
         let mut config = Config::get().await?;
 
-        return execute_with_tool_request(&stub, &mut config, args, &self.file).await;
+        execute_with_tool_request(&stub, &mut config, args, &file).await
     }
 }
