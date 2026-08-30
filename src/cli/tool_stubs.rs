@@ -1132,8 +1132,13 @@ async fn load_config_commands(system: bool) -> Result<(String, IndexMap<String, 
         .iter()
         .map(|(name, spec)| (name.clone(), spec.value.clone()))
         .collect::<IndexMap<_, _>>();
-    let contents = toml::to_string(&values)?;
-    Ok((crate::hash::hash_sha256_to_str(&contents), commands))
+    Ok((config_commands_source_hash(&values)?, commands))
+}
+
+fn config_commands_source_hash(values: &IndexMap<String, toml::Value>) -> Result<String> {
+    Ok(crate::hash::hash_sha256_to_str(&serde_json::to_string(
+        values,
+    )?))
 }
 
 fn validate_command_name(name: &str) -> Result<()> {
@@ -1318,6 +1323,25 @@ mod tests {
         assert!(rendered.contains("version = \"14\""));
         assert!(rendered.contains("bin = \"rg\""));
         assert!(rendered.contains("# managed by mise tool-stubs bundle bundle"));
+    }
+
+    #[test]
+    fn hashes_mixed_config_commands_without_toml_ordering_constraints() {
+        let values = IndexMap::from([
+            (
+                "table-command".into(),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "tool".into(),
+                    toml::Value::String("dummy".into()),
+                )])),
+            ),
+            (
+                "string-command".into(),
+                toml::Value::String("dummy@1".into()),
+            ),
+        ]);
+
+        assert!(config_commands_source_hash(&values).is_ok());
     }
 
     #[test]

@@ -63,7 +63,7 @@ This will update mise.lock if it is enabled, see <https://mise.jdx.dev/configura
   Use this to bypass `upgrade.prune_after`, or to override
   `upgrade.auto_prune = false` for a single run.
 - **`--raw`** — Connect backend install command stdin/stdout/stderr directly to the terminal Implies --jobs=1
-- **`--tool-stubs`** — Also upgrade versions selected by tracked tool stubs
+- **`--tool-stubs`** — Also upgrade versions selected by tracked user stubs and published system stubs
 - **`-h --help`** — Print help
 
 Deprecation:

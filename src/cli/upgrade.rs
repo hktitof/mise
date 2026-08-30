@@ -130,7 +130,7 @@ pub(crate) struct Upgrade {
     #[usage(long, overrides = "jobs")]
     raw: bool,
 
-    /// Also upgrade versions selected by tracked tool stubs
+    /// Also upgrade versions selected by tracked user stubs and published system stubs
     #[usage(long)]
     tool_stubs: bool,
 }
@@ -337,13 +337,19 @@ pub(crate) async fn upgrade_tool_stub_paths(
                 }
             }
             PruneMode::Deferred(after) => {
-                crate::tool_purgatory::schedule(&old_tv, after)?;
-                info!(
-                    "{}@{} will be pruned after {}",
-                    outdated.name,
-                    old_version,
-                    Settings::get().upgrade.prune_after
-                );
+                if let Err(err) = crate::tool_purgatory::schedule(&old_tv, after) {
+                    warn!(
+                        "failed to schedule {}@{} for pruning: {err:#}",
+                        outdated.name, old_version
+                    );
+                } else {
+                    info!(
+                        "{}@{} will be pruned after {}",
+                        outdated.name,
+                        old_version,
+                        Settings::get().upgrade.prune_after
+                    );
+                }
             }
             PruneMode::None => {}
         }

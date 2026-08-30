@@ -216,7 +216,7 @@
 - [`mise token github [FLAGS] [HOST]`](/cli/token/github.md)
 - [`mise token gitlab [--unmask] [HOST]`](/cli/token/gitlab.md)
 - [`mise tool [FLAGS] <TOOL>`](/cli/tool.md)
-- [`mise tool-stub [FILE] [ARGS]… <SUBCOMMAND>`](/cli/tool-stub.md)
+- [`mise tool-stub [FILE] [ARGS]… [COMMAND]`](/cli/tool-stub.md)
 - [`mise tool-stub sync [FLAGS] [MANIFEST]`](/cli/tool-stub/sync.md)
 - [`mise tool-stub status [FLAGS] [MANIFEST]`](/cli/tool-stub/status.md)
 - [`mise tool-stub upgrade [FLAGS] [MANIFEST]`](/cli/tool-stub/upgrade.md)
