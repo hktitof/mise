@@ -13,10 +13,17 @@ CUSTOM_PATH="/some/other/bin:$SHIMS_DIR:/usr/bin"
 # Shims later in PATH: should be emitted as a prepend with shims first
 assert_contains "env PATH='$CUSTOM_PATH' $MISE_BIN activate bash --shims" "export PATH=\"$SHIMS_DIR:"
 
-# Shims already first and the mise executable dir already present: no PATH
-# change is needed, so activation emits no prepend.
+# Shims already first and the mise executable dir already present: activation
+# still publishes the managed-stub bins, then re-prepends shims once so they
+# remain first.
 EXE_DIR="$(dirname "$MISE_BIN")"
-assert_not_contains "env PATH='$SHIMS_DIR:$EXE_DIR:/usr/bin' $MISE_BIN activate bash --shims" "export PATH="
+out="$(env PATH="$SHIMS_DIR:$EXE_DIR:/usr/bin" "$MISE_BIN" activate bash --shims)"
+shims_lines="$(printf '%s\n' "$out" | grep -Fc "export PATH=\"$SHIMS_DIR:" || true)"
+if [[ $shims_lines != "1" ]]; then
+  echo "FAIL: expected exactly one shims prepend after managed-stub paths, got $shims_lines:"
+  printf '%s\n' "$out"
+  exit 1
+fi
 
 check_repeated_source() {
   local shell_type="$1"
@@ -54,16 +61,16 @@ check_repeated_source bash "$BASH_BIN" "$EXE_DIR:/some/other/bin:$SHIMS_DIR:/usr
 # Regression #10264: when the dir containing the mise executable is already in
 # PATH (e.g. a deb install at /usr/bin), --shims must NOT re-prepend it, which
 # would reorder PATH (moving /usr/bin ahead of /usr/local/bin). Only the shims
-# dir should be prepended, so exactly one `export PATH=` line is emitted.
+# dir should be prepended exactly once; managed-stub PATH lines may precede it.
 if ! out="$(env PATH="$EXE_DIR:/usr/local/bin:/usr/bin" "$MISE_BIN" activate bash --shims 2>&1)"; then
   echo "FAIL: 'mise activate bash --shims' exited non-zero:"
   printf '%s\n' "$out"
   exit 1
 fi
 assert_contains_text "$out" "export PATH=\"$SHIMS_DIR:"
-path_lines="$(printf '%s\n' "$out" | grep -c 'export PATH=' || true)"
-if [[ $path_lines != "1" ]]; then
-  echo "FAIL: expected exactly one 'export PATH=' line (shims only) since the mise dir is already in PATH, got $path_lines:"
+shims_lines="$(printf '%s\n' "$out" | grep -Fc "export PATH=\"$SHIMS_DIR:" || true)"
+if [[ $shims_lines != "1" ]]; then
+  echo "FAIL: expected exactly one shims prepend since the mise dir is already in PATH, got $shims_lines:"
   printf '%s\n' "$out"
   exit 1
 fi

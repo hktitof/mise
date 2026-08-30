@@ -44,4 +44,6 @@ mise shell node@18.0.0 && _mise_hook
 test "$(node -v)" = "v18.0.0"
 
 mise deactivate
-assert_path ""
+# Managed-stub bins are static shell integration paths, while the dynamic
+# tool-version paths above are removed by deactivation.
+assert_path "$MISE_DATA_DIR/tool-stubs/bin:/usr/local/share/mise/tool-stubs/bin"
