@@ -14,6 +14,14 @@ cat >"$MISE_CONFIG_DIR/config.toml" <<'EOF'
 dummy-scope = { tool = "dummy", version = "2", bin = "dummy" }
 EOF
 
+# Project config cannot publish commands into a shared user or system bin.
+mkdir project-catalogue
+cat >project-catalogue/mise.toml <<'EOF'
+[tool_stubs]
+project-command = "dummy@2"
+EOF
+assert_fail_contains "cd project-catalogue && mise tool-stub status 2>&1" "[tool_stubs] is only supported in system and global config files"
+
 # Activation publishes both managed bins before they exist so a later sync is
 # immediately visible in the already-activated shell.
 assert_fail "test -d '$MISE_SYSTEM_DATA_DIR/tool-stubs/bin'"

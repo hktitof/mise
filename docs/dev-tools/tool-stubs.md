@@ -34,6 +34,10 @@ commands live in mise-owned data, not in the user-editable `~/.local/bin`:
 mise tool-stub sync
 ```
 
+`[tool_stubs]` is accepted only in system and global user config files. Project
+config files cannot publish commands into either shared bin; use an explicit
+`[commands]` manifest with `--into` for a project-owned bundle.
+
 System administrators and operating-system distributions can put lower
 precedence declarations in normal system config, such as
 `/etc/mise/config.toml` or `/etc/mise/conf.d/*.toml`:

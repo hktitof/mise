@@ -1,4 +1,4 @@
-use eyre::{WrapErr, eyre};
+use eyre::{WrapErr, ensure, eyre};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use once_cell::sync::OnceCell;
@@ -26,6 +26,7 @@ use crate::config::config_file::{config_root, toml::deserialize_arr};
 use crate::config::env_directive::{
     AgeFormat, EnvDirective, EnvDirectiveOptions, EnvValue, RequiredValue,
 };
+use crate::config::provenance::ConfigProvenance;
 use crate::config::settings::SettingsPartial;
 use crate::config::{Alias, AliasMap, Config, Settings};
 use crate::deps::{DepsConfig, DepsTemplateContext};
@@ -563,6 +564,11 @@ impl MiseToml {
                 return Err(toml_parse_error(&err, body, path));
             }
         };
+        ensure!(
+            rf.tool_stubs.is_empty() || !ConfigProvenance::from_path(path).scope().is_project(),
+            "[tool_stubs] is only supported in system and global config files; found it in {}",
+            display_path(path)
+        );
         if let Some(legacy_monorepo_root) = rf.experimental_monorepo_root.take() {
             deprecated_at!(
                 "2026.7.7",
@@ -2968,6 +2974,26 @@ mod tests {
             Some(&toml::Value::String("ripgrep@14".into()))
         );
         assert_eq!(config.tool_stubs["node"]["version"].as_str(), Some("22"));
+    }
+
+    #[test]
+    fn rejects_tool_stubs_in_project_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mise.toml");
+        let err = MiseToml::from_str(
+            indoc! {r#"
+                [tool_stubs]
+                rg = "ripgrep@14"
+            "#},
+            &path,
+        )
+        .err()
+        .expect("project tool stubs should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("[tool_stubs] is only supported in system and global config files")
+        );
     }
 
     #[test]
