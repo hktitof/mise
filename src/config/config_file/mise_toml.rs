@@ -2987,8 +2987,7 @@ mod tests {
             "#},
             &path,
         )
-        .err()
-        .expect("project tool stubs should be rejected");
+        .expect_err("project tool stubs should be rejected");
 
         assert!(
             err.to_string()
