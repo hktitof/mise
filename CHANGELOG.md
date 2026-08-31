@@ -1,5 +1,27 @@
 # Changelog
 
+## [2026.8.17](https://github.com/jdx/mise/compare/v2026.8.16..v2026.8.17) - 2026-08-31
+
+### 🚀 Features
+
+- **(erlang)** add precompiled OS override by @jdx in [#12637](https://github.com/jdx/mise/pull/12637)
+
+### 🐛 Bug Fixes
+
+- **(install)** expose postinstall tool to nested mise by @jdx in [#12635](https://github.com/jdx/mise/pull/12635)
+
+### 📦️ Dependency Updates
+
+- update rust crate aube to v2.2.4 by @renovate[bot] in [#12639](https://github.com/jdx/mise/pull/12639)
+
+### Chore
+
+- bump mr-boxington to 1.2.0 by @jdx in [#12633](https://github.com/jdx/mise/pull/12633)
+
+### Ci
+
+- **(perf)** move benchmarks to dedicated runner by @jdx in [#12616](https://github.com/jdx/mise/pull/12616)
+
 ## [2026.8.16](https://github.com/jdx/mise/compare/v2026.8.15..v2026.8.16) - 2026-08-31
 
 ### 🚀 Features
